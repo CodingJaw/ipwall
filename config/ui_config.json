@@ -1,0 +1,16 @@
+{
+  "service_links": [
+    {
+      "id": "primary-app",
+      "label": "Open APP",
+      "url": "https://sub.example.com"
+    },
+    {
+      "id": "apps-or-browser",
+      "label": "Apps or Browser",
+      "url": "https://sub2.example.com",
+      "copyable": true,
+      "helper_text": "Apps must use this link to connect"
+    }
+  ]
+}

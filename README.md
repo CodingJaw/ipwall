@@ -54,6 +54,8 @@ docker build -t ipwall .
 docker run --rm -p 8080:8080 \
   -e FLASK_SECRET_KEY='change-me' \
   -e TRUSTED_PROXY_CIDR='0.0.0.0/0' \
+  -e UI_CONFIG_PATH='/app/config/ui_config.json' \
+  -v $(pwd)/config/ui_config.json:/app/config/ui_config.json:ro \
   ipwall
 ```
 
@@ -82,8 +84,53 @@ Admin behavior is enabled when `admin` appears in `X-Auth-Request-Groups`.
 |---|---|---|
 | `FLASK_SECRET_KEY` | random generated at startup | Flask session/CSRF signing key |
 | `TRUSTED_PROXY_CIDR` | `172.20.0.0/16` | Allowed source range for reverse proxy |
-| `SUB_URL` | `https://sub.example.com` | Primary service link shown in UI |
-| `SUB2_URL` | `https://sub2.example.com` | Secondary/copyable service link shown in UI |
+| `UI_CONFIG_PATH` | `config/ui_config.json` | Path to JSON UI config containing dashboard service links |
+| `SUB_URL` | `https://sub.example.com` | Legacy fallback value used when UI config is missing/invalid |
+| `SUB2_URL` | `https://sub2.example.com` | Legacy fallback value used when UI config is missing/invalid |
+
+## UI service links config
+
+The dashboard "Services" section is loaded from JSON at `UI_CONFIG_PATH` (default `config/ui_config.json`).
+
+`service_links` is an array. Each row requires:
+
+- `id` (string)
+- `label` (string)
+- `url` (string)
+
+Optional fields:
+
+- `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
+- `helper_text` (string) — render descriptive helper text above the displayed URL.
+
+Malformed rows are ignored. If the file is missing/invalid or all rows are malformed, app-safe defaults are used.
+
+Example:
+
+```json
+{
+  "service_links": [
+    {
+      "id": "primary-app",
+      "label": "Open APP",
+      "url": "https://sub.example.com"
+    },
+    {
+      "id": "apps-or-browser",
+      "label": "Apps or Browser",
+      "url": "https://sub2.example.com",
+      "copyable": true,
+      "helper_text": "Apps must use this link to connect"
+    }
+  ]
+}
+```
+
+### Docker deployment notes
+
+- The image includes `config/ui_config.json` by default.
+- To customize links without rebuilding, bind mount your config file and set `UI_CONFIG_PATH` if you use a different location.
+- Recommended mount: `-v /path/on/host/ui_config.json:/app/config/ui_config.json:ro`.
 
 ## Data files
 

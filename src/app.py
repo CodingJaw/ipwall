@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import yaml
 import secrets
 import ipaddress
@@ -30,6 +31,23 @@ IP_EXPIRY_DAYS = 90
 
 SUB_URL = os.environ.get("SUB_URL", "https://sub.example.com")
 SUB2_URL = os.environ.get("SUB2_URL", "https://sub2.example.com")
+UI_CONFIG_PATH = os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
+
+DEFAULT_SERVICE_LINKS = [
+    {
+        "id": "primary-app",
+        "label": "Open APP",
+        "url": SUB_URL,
+        "copyable": False
+    },
+    {
+        "id": "apps-or-browser",
+        "label": "Apps or Browser",
+        "url": SUB2_URL,
+        "copyable": True,
+        "helper_text": "Apps must use this link to connect"
+    }
+]
 
 # --------------------------------------------------
 # Trusted Proxy Enforcement
@@ -145,6 +163,62 @@ def get_identity():
 
 def is_admin(groups):
     return "admin" in groups
+
+
+# --------------------------------------------------
+# UI Config
+# --------------------------------------------------
+
+def validate_service_link(entry):
+
+    if not isinstance(entry, dict):
+        return None
+
+    link_id = entry.get("id")
+    label = entry.get("label")
+    url = entry.get("url")
+
+    if not all(isinstance(v, str) and v.strip() for v in (link_id, label, url)):
+        return None
+
+    validated = {
+        "id": link_id.strip(),
+        "label": label.strip(),
+        "url": url.strip(),
+        "copyable": bool(entry.get("copyable", False))
+    }
+
+    helper_text = entry.get("helper_text")
+    if isinstance(helper_text, str) and helper_text.strip():
+        validated["helper_text"] = helper_text.strip()
+
+    return validated
+
+
+def load_ui_config(config_path=UI_CONFIG_PATH):
+
+    service_links = [dict(link) for link in DEFAULT_SERVICE_LINKS]
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {"service_links": service_links}
+
+    raw_links = raw.get("service_links") if isinstance(raw, dict) else None
+    if not isinstance(raw_links, list):
+        return {"service_links": service_links}
+
+    validated_links = []
+    for entry in raw_links:
+        validated = validate_service_link(entry)
+        if validated:
+            validated_links.append(validated)
+
+    if not validated_links:
+        return {"service_links": service_links}
+
+    return {"service_links": validated_links}
 
 
 # --------------------------------------------------
@@ -328,6 +402,8 @@ def index():
                     "expires": expires.isoformat() if expires else None
                 })
 
+    ui_config = load_ui_config()
+
     return render_template(
         "index.html",
         user_data=identity,
@@ -336,8 +412,7 @@ def index():
         expiry_days=IP_EXPIRY_DAYS,
         is_admin=is_admin(identity["groups"]),
         csrf_token=generate_csrf_token(),
-        sub_url=SUB_URL,
-        sub2_url=SUB2_URL,
+        service_links=ui_config["service_links"],
         active_ssh=active_ssh
     )
 

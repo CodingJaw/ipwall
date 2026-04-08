@@ -251,28 +251,29 @@ IPs expire automatically after {{ expiry_days }} days of inactivity.
 
 <div class="d-grid gap-2">
 
-<a class="btn btn-outline-primary" href="{{ sub_url }}">
-Open APP
+{% for service in service_links %}
+
+<a class="btn btn-outline-primary" href="{{ service.url }}">
+{{ service.label }}
 </a>
 
-<a class="btn btn-outline-success" href="{{ sub2_url }}">
-Apps or Browser
-</a>
-
+{% if service.copyable %}
 <button class="btn btn-outline-secondary copy-btn"
-data-copy="{{ sub2_url }}">
+data-copy="{{ service.url }}">
 Copy Link to Clipboard
 </button>
+{% endif %}
 
-<div class="text-center my-4">
-
+{% if service.helper_text %}
+<div class="text-center my-2">
 <div class="fw-semibold mb-2">
-Apps must use this link to connect
+{{ service.helper_text }}
 </div>
-
-<code class="fs-6 user-select-all">{{ sub2_url }}</code>
-
+<code class="fs-6 user-select-all">{{ service.url }}</code>
 </div>
+{% endif %}
+
+{% endfor %}
 
 </div>
 
