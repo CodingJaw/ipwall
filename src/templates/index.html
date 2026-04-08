@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>IPWall</title>
+
+<!-- Favicons -->
+<link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon_16x16.png') }}">
+<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon_32x32.png') }}">
+<link rel="icon" type="image/png" sizes="48x48" href="{{ url_for('static', filename='favicon_48x48.png') }}">
+<link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='favicon_192x192.png') }}">
+<link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='favicon_512x512.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple_touch_icon.png') }}">
+<link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
+<meta name="theme-color" content="#0d3b82">
+
+<link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}">
+
+</head>
+
+<body class="bg-body-tertiary">
+
+<div class="container py-5" style="max-width:960px;">
+
+<!-- Header -->
+
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+
+<div>
+<h2 class="fw-bold mb-1">IPWall Access Control</h2>
+<div class="text-muted">Manage authorized IPs and temporary SSH access</div>
+</div>
+
+<button id="themeToggle" class="btn btn-outline-secondary btn-sm">
+Toggle Dark Mode
+</button>
+
+</div>
+
+<!-- Flash messages -->
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+
+<div class="alert alert-{{ category }} alert-dismissible fade show">
+{{ message }}
+<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<!-- User Info -->
+
+<div class="card shadow-sm mb-4">
+
+<div class="card-body">
+
+<h5 class="card-title mb-3">User</h5>
+
+<div class="row g-3">
+
+<div class="col-md-7">
+
+<div class="text-muted small">Email</div>
+<div class="fw-semibold">{{ user_data.email }}</div>
+
+</div>
+
+<div class="col-md-5">
+
+<div class="text-muted small">Current IP</div>
+<div class="fw-semibold">{{ user_data.ip }}</div>
+
+</div>
+
+</div>
+
+<form action="/add_ip" method="post" class="mt-3 d-grid gap-2">
+
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+{% if is_admin %}
+
+<div class="row g-2 align-items-center">
+
+<div class="col-auto">
+
+<div class="form-check">
+
+<input class="form-check-input"
+type="checkbox"
+name="ssh_enable"
+value="1"
+id="sshEnable">
+
+<label class="form-check-label" for="sshEnable">
+Enable SSH
+</label>
+
+</div>
+
+</div>
+
+<div class="col-auto">
+
+<select class="form-select form-select-sm" name="ssh_hours">
+
+<option value="1">1 Hour</option>
+<option value="2">2 Hours</option>
+<option value="4" selected>4 Hours</option>
+<option value="8">8 Hours</option>
+<option value="12">12 Hours</option>
+<option value="24">24 Hours</option>
+
+</select>
+
+</div>
+
+</div>
+
+{% endif %}
+
+<button class="btn btn-primary">
+
+{% if current_ip_authorized %}
+Refresh Current IP
+{% else %}
+Add / Refresh Current IP
+{% endif %}
+
+</button>
+
+</form>
+
+</div>
+</div>
+
+<!-- IP List -->
+
+<div class="card shadow-sm mb-4">
+
+<div class="card-body">
+
+<h5 class="card-title mb-3">Your Authorized IPs</h5>
+
+{% if user_ips and user_ips|length > 0 %}
+
+<ul class="list-group">
+
+{% for entry in user_ips %}
+
+<li class="list-group-item d-flex justify-content-between align-items-center">
+
+<div>
+
+<div class="fw-semibold">
+
+{{ entry.ip }}
+
+{% if entry.ssh %}
+
+{% if entry.enabledssh %}
+
+<span class="badge bg-success ms-2">
+SSH Enabled ({{ entry.ssh_hours }}h)
+</span>
+
+{% else %}
+
+<span class="badge bg-warning text-dark ms-2">
+SSH Pending ({{ entry.ssh_hours }}h)
+</span>
+
+{% endif %}
+
+{% endif %}
+
+</div>
+
+{% if entry.last_seen %}
+<div class="text-muted small">
+Last seen: {{ entry.last_seen }}
+</div>
+{% endif %}
+
+</div>
+
+<div class="d-flex gap-2">
+
+{% if is_admin and entry.ssh %}
+
+<form action="/revoke_ssh" method="post">
+
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="ip" value="{{ entry.ip }}">
+
+<button class="btn btn-sm btn-outline-warning">
+Revoke SSH
+</button>
+
+</form>
+
+{% endif %}
+
+<form action="/remove_ip" method="post">
+
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="ip" value="{{ entry.ip }}">
+
+<button class="btn btn-sm btn-outline-danger">
+Remove
+</button>
+
+</form>
+
+</div>
+
+</li>
+
+{% endfor %}
+
+</ul>
+
+<div class="text-muted small mt-3">
+IPs expire automatically after {{ expiry_days }} days of inactivity.
+</div>
+
+{% else %}
+
+<div class="text-muted">No IP addresses registered.</div>
+
+{% endif %}
+
+</div>
+</div>
+
+<!-- Services -->
+
+<div class="card shadow-sm mb-4">
+
+<div class="card-body">
+
+<h5 class="card-title mb-3">Services</h5>
+
+<div class="d-grid gap-2">
+
+<a class="btn btn-outline-primary" href="{{ sub_url }}">
+Open APP
+</a>
+
+<a class="btn btn-outline-success" href="{{ sub2_url }}">
+Apps or Browser
+</a>
+
+<button class="btn btn-outline-secondary copy-btn"
+data-copy="{{ sub2_url }}">
+Copy Link to Clipboard
+</button>
+
+<div class="text-center my-4">
+
+<div class="fw-semibold mb-2">
+Apps must use this link to connect
+</div>
+
+<code class="fs-6 user-select-all">{{ sub2_url }}</code>
+
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+<!-- Admin SSH Dashboard -->
+
+{% if is_admin %}
+
+<div class="card shadow-sm mb-4 border-warning">
+
+<div class="card-body">
+
+<h5 class="card-title mb-3">Active Temporary SSH Access</h5>
+
+{% if active_ssh and active_ssh|length > 0 %}
+
+<div class="table-responsive">
+
+<table class="table table-sm align-middle">
+
+<thead>
+
+<tr>
+<th>Email</th>
+<th>IP</th>
+<th>Status</th>
+<th>Duration</th>
+<th>Remaining</th>
+</tr>
+
+</thead>
+
+<tbody>
+
+{% for s in active_ssh %}
+
+<tr>
+
+<td>{{ s.email }}</td>
+
+<td>{{ s.ip }}</td>
+
+<td>
+
+{% if s.status == "Active" %}
+<span class="badge bg-success">Active</span>
+
+{% elif s.status == "Pending" %}
+<span class="badge bg-warning text-dark">Pending</span>
+
+{% else %}
+<span class="badge bg-secondary">Expired</span>
+{% endif %}
+
+</td>
+
+<td>{{ s.hours }}h</td>
+
+<td>
+
+{% if s.expires %}
+
+<span class="ssh-countdown"
+data-expire="{{ s.expires }}">
+calculating...
+</span>
+
+{% else %}
+
+—
+
+{% endif %}
+
+</td>
+
+</tr>
+
+{% endfor %}
+
+</tbody>
+
+</table>
+
+</div>
+
+{% else %}
+
+<div class="text-muted">
+No active SSH sessions.
+</div>
+
+{% endif %}
+
+</div>
+
+</div>
+
+{% endif %}
+
+<!-- Admin Controls -->
+
+{% if is_admin %}
+
+<div class="card shadow-sm border-danger">
+
+<div class="card-body">
+
+<h5 class="card-title text-danger mb-3">
+Admin Controls
+</h5>
+
+<button class="btn btn-danger w-100"
+data-bs-toggle="modal"
+data-bs-target="#confirmClearModal">
+
+Clear ALL User Data
+
+</button>
+
+</div>
+
+</div>
+
+<!-- Confirm Modal -->
+
+<div class="modal fade"
+id="confirmClearModal"
+tabindex="-1">
+
+<div class="modal-dialog">
+
+<div class="modal-content">
+
+<form action="/clear_all_users" method="post">
+
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+<div class="modal-header">
+
+<h5 class="modal-title text-danger">
+Confirm Destructive Action
+</h5>
+
+<button type="button"
+class="btn-close"
+data-bs-dismiss="modal">
+</button>
+
+</div>
+
+<div class="modal-body">
+
+<p>This will remove ALL user IP records and clear the whitelist.</p>
+
+<input type="text"
+name="confirm"
+class="form-control"
+placeholder="Type YES to confirm"
+required>
+
+</div>
+
+<div class="modal-footer">
+
+<button type="button"
+class="btn btn-secondary"
+data-bs-dismiss="modal">
+Cancel
+</button>
+
+<button type="submit"
+class="btn btn-danger">
+Confirm
+</button>
+
+</div>
+
+</form>
+
+</div>
+
+</div>
+
+</div>
+
+{% endif %}
+
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+
+<script>
+
+const toggle = document.getElementById('themeToggle');
+const html = document.documentElement;
+
+if (localStorage.getItem('theme') === 'dark') {
+html.setAttribute('data-bs-theme', 'dark');
+}
+
+toggle.addEventListener('click', () => {
+
+const current = html.getAttribute('data-bs-theme');
+
+const next = current === 'dark' ? 'light' : 'dark';
+
+html.setAttribute('data-bs-theme', next);
+
+localStorage.setItem('theme', next);
+
+});
+
+document.querySelectorAll(".copy-btn").forEach(btn => {
+
+btn.addEventListener("click", function(){
+
+const text = this.dataset.copy;
+
+navigator.clipboard.writeText(text).then(() => {
+
+const original = this.innerText;
+
+this.innerText = "Copied!";
+
+setTimeout(() => {
+this.innerText = original;
+},1500);
+
+});
+
+});
+
+});
+
+function updateCountdowns(){
+
+const now = new Date().getTime();
+
+document.querySelectorAll(".ssh-countdown").forEach(el => {
+
+const expire = new Date(el.dataset.expire).getTime();
+
+const diff = expire - now;
+
+if(diff <= 0){
+el.innerText = "Expired";
+return;
+}
+
+const minutes = Math.floor(diff / 60000);
+const seconds = Math.floor((diff % 60000) / 1000);
+
+el.innerText = minutes + "m " + seconds + "s";
+
+if(diff < 600000){
+el.style.color = "#dc3545";
+el.style.fontWeight = "bold";
+}
+
+});
+
+}
+
+updateCountdowns();
+setInterval(updateCountdowns,1000);
+
+</script>
+
+</body>
+</html>
