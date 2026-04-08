@@ -85,12 +85,16 @@ Admin behavior is enabled when `admin` appears in `X-Auth-Request-Groups`.
 | `FLASK_SECRET_KEY` | random generated at startup | Flask session/CSRF signing key |
 | `TRUSTED_PROXY_CIDR` | `172.20.0.0/16` | Allowed source range for reverse proxy |
 | `UI_CONFIG_PATH` | `config/ui_config.json` | Path to JSON UI config containing dashboard service links |
-| `SUB_URL` | `https://sub.example.com` | Legacy fallback value used when UI config is missing/invalid |
-| `SUB2_URL` | `https://sub2.example.com` | Legacy fallback value used when UI config is missing/invalid |
 
 ## UI service links config
 
 The dashboard "Services" section is loaded from JSON at `UI_CONFIG_PATH` (default `config/ui_config.json`).
+
+Initialize local config from the template:
+
+```bash
+cp config/ui_config.example.json config/ui_config.json
+```
 
 `service_links` is an array. Each row requires:
 
@@ -103,7 +107,7 @@ Optional fields:
 - `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
 - `helper_text` (string) — render descriptive helper text above the displayed URL.
 
-Malformed rows are ignored. If the file is missing/invalid or all rows are malformed, app-safe defaults are used.
+Malformed rows are ignored. If the file is missing/invalid or all rows are malformed, the app will render no service links.
 
 Example:
 
@@ -128,7 +132,8 @@ Example:
 
 ### Docker deployment notes
 
-- The image includes `config/ui_config.json` by default.
+- This repo ships `config/ui_config.example.json` as a template.
+- Create your real config as `config/ui_config.json` (gitignored) so future pulls do not overwrite it.
 - To customize links without rebuilding, bind mount your config file and set `UI_CONFIG_PATH` if you use a different location.
 - Recommended mount: `-v /path/on/host/ui_config.json:/app/config/ui_config.json:ro`.
 

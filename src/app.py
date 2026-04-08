@@ -29,25 +29,7 @@ IP_WHITELIST_FILE = "ip_whitelist.yml"
 
 IP_EXPIRY_DAYS = 90
 
-SUB_URL = os.environ.get("SUB_URL", "https://sub.example.com")
-SUB2_URL = os.environ.get("SUB2_URL", "https://sub2.example.com")
 UI_CONFIG_PATH = os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
-
-DEFAULT_SERVICE_LINKS = [
-    {
-        "id": "primary-app",
-        "label": "Open APP",
-        "url": SUB_URL,
-        "copyable": False
-    },
-    {
-        "id": "apps-or-browser",
-        "label": "Apps or Browser",
-        "url": SUB2_URL,
-        "copyable": True,
-        "helper_text": "Apps must use this link to connect"
-    }
-]
 
 # --------------------------------------------------
 # Trusted Proxy Enforcement
@@ -196,8 +178,7 @@ def validate_service_link(entry):
 
 
 def load_ui_config(config_path=UI_CONFIG_PATH):
-
-    service_links = [dict(link) for link in DEFAULT_SERVICE_LINKS]
+    service_links = []
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:

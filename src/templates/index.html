@@ -249,6 +249,7 @@ IPs expire automatically after {{ expiry_days }} days of inactivity.
 
 <h5 class="card-title mb-3">Services</h5>
 
+{% if service_links and service_links|length > 0 %}
 <div class="d-grid gap-2">
 
 {% for service in service_links %}
@@ -276,6 +277,9 @@ Copy Link to Clipboard
 {% endfor %}
 
 </div>
+{% else %}
+<div class="text-muted">No service links configured.</div>
+{% endif %}
 
 </div>
 
