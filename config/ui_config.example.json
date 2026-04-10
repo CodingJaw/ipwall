@@ -3,12 +3,20 @@
     {
       "id": "main-bastion",
       "name": "Main Bastion",
-      "enabled": true
+      "enabled": true,
+      "remote_host": "main-bastion.example.com",
+      "remote_user": "ipwall",
+      "remote_port": 22,
+      "remote_script": "/usr/local/bin/ipwall-remote-sync"
     },
     {
       "id": "db-admin",
       "name": "DB Admin Host",
-      "enabled": true
+      "enabled": true,
+      "remote_host": "db-admin.example.com",
+      "remote_user": "ipwall",
+      "remote_port": 22,
+      "remote_script": "/usr/local/bin/ipwall-remote-sync"
     }
   ],
   "service_links": [

@@ -227,6 +227,62 @@ http:
 - Marks first activation (`enabledssh`, `ssh_enabled_time`) and logs to `/var/log/ipwall_ssh_audit.log`.
 - Auto-revokes expired SSH grants (`ssh_hours`, default 4h).
 
+## Remote SSH sync (push from main server)
+
+The Flask app can push SSH grant/revoke updates from the main server to selected remote hosts. Remote hosts still apply firewall rules locally.
+
+### Target mapping in config
+
+Each `ssh_targets` entry in `config/ui_config.json` can include remote connection details:
+
+- `remote_host` — DNS name or IP of the remote host.
+- `remote_user` — SSH user used by the main server.
+- `remote_port` — SSH port (default `22`).
+- `remote_script` — restricted remote script path (default `/usr/local/bin/ipwall-remote-sync`).
+
+Only targets with valid `id` + remote connection fields are used for remote sync.
+
+### Runtime behavior
+
+- On SSH grant (`/add_ip` with selected SSH targets), IPWall runs `ssh` per target and invokes the remote script with `--action grant`.
+- On SSH revoke (`/revoke_ssh` or target removal from an existing IP), IPWall invokes the remote script with `--action revoke`.
+- Calls are per-target with timeout (default `10s`, env `REMOTE_SYNC_TIMEOUT_SECONDS`).
+- Failures are isolated: one failed target does not block other targets or local YAML persistence.
+- Results are logged to `remote_sync_results.log` (env `REMOTE_SYNC_LOG_FILE`) including timestamp, requester email, IP, action, target, and status.
+
+### Required remote script contract
+
+The remote script should be idempotent and must only modify the `IPWALL_SSH` chain:
+
+```bash
+/usr/local/bin/ipwall-remote-sync --chain IPWALL_SSH --action grant --ip 203.0.113.5
+/usr/local/bin/ipwall-remote-sync --chain IPWALL_SSH --action revoke --ip 203.0.113.5
+```
+
+Recommended implementation approach:
+
+- Ensure chain exists before updates.
+- For `grant`, add allow rule only if it is not already present.
+- For `revoke`, remove matching rule(s) if present.
+- Do not alter unrelated chains/rules.
+
+### SSH key and forced-command hardening
+
+On each remote host, create a dedicated key pair and restrict the authorized key with a forced command:
+
+```text
+command=\"/usr/local/bin/ipwall-remote-sync-wrapper\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 AAAA... main-ipwall
+```
+
+Suggested wrapper behavior:
+
+- Validate expected flags (`--chain`, `--action`, `--ip`) and reject anything else.
+- Enforce `--chain IPWALL_SSH` regardless of user input.
+- Execute only the approved sync script/binary.
+- Log invocations for audit.
+
+Also ensure the main server has remote host keys pinned in `known_hosts`, because IPWall uses strict host-key checking.
+
 ## Installing the firewall sync job
 
 Use `ipscript/firewall_install.py` as root:

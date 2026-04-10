@@ -13,6 +13,8 @@ from flask import (
     abort, session
 )
 
+from remote_sync import sync_targets
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
@@ -562,8 +564,14 @@ def add_ip():
         (e for e in user["ips"] if e.get("ip") == identity["ip"]),
         None
     )
+    previous_target_ids = set()
 
     if existing:
+        previous_target_ids = {
+            t.get("target_id")
+            for t in existing.get("ssh_targets", [])
+            if isinstance(t, dict) and t.get("target_id")
+        }
 
         existing["last_seen"] = now
 
@@ -621,6 +629,44 @@ def add_ip():
     save_yaml(USER_DATA_FILE, data)
 
     update_whitelist_if_changed(data)
+
+    if is_admin(identity["groups"]):
+        selected_target_ids = set(ssh_target_ids)
+
+        if selected_target_ids:
+            try:
+                grant_result = sync_targets(
+                    action="grant",
+                    requester_email=identity["email"],
+                    ip=identity["ip"],
+                    target_ids=sorted(selected_target_ids),
+                )
+                if grant_result["failed"] > 0:
+                    flash(
+                        f"SSH grant partially applied "
+                        f"({grant_result['succeeded']} success, {grant_result['failed']} failed)",
+                        "warning"
+                    )
+            except Exception:
+                flash("SSH grant saved locally but remote sync failed", "warning")
+
+        removed_target_ids = previous_target_ids - selected_target_ids
+        if removed_target_ids:
+            try:
+                revoke_result = sync_targets(
+                    action="revoke",
+                    requester_email=identity["email"],
+                    ip=identity["ip"],
+                    target_ids=sorted(removed_target_ids),
+                )
+                if revoke_result["failed"] > 0:
+                    flash(
+                        f"SSH revoke partially applied "
+                        f"({revoke_result['succeeded']} success, {revoke_result['failed']} failed)",
+                        "warning"
+                    )
+            except Exception:
+                flash("SSH revoke saved locally but remote sync failed", "warning")
 
     return redirect(url_for("index"))
 
@@ -694,6 +740,18 @@ def revoke_ssh():
                     entry.pop("ssh_targets", None)
 
     save_yaml(USER_DATA_FILE, data)
+
+    try:
+        result = sync_targets(
+            action="revoke",
+            requester_email=identity["email"],
+            ip=ip,
+            target_ids=[target_id],
+        )
+        if result["failed"] > 0:
+            flash("SSH revoke updated locally but failed on one or more remote targets", "warning")
+    except Exception:
+        flash("SSH revoke updated locally but remote sync failed", "warning")
 
     flash("SSH access revoked", "warning")
 
