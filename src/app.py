@@ -177,6 +177,37 @@ def validate_service_link(entry):
     return validated
 
 
+def validate_service_group(entry):
+
+    if not isinstance(entry, dict):
+        return None
+
+    group_id = entry.get("id")
+    heading = entry.get("heading")
+    links = entry.get("links")
+
+    if not all(isinstance(v, str) and v.strip() for v in (group_id, heading)):
+        return None
+
+    if not isinstance(links, list):
+        return None
+
+    validated_links = []
+    for link in links:
+        validated = validate_service_link(link)
+        if validated:
+            validated_links.append(validated)
+
+    if not validated_links:
+        return None
+
+    return {
+        "id": group_id.strip(),
+        "heading": heading.strip(),
+        "links": validated_links
+    }
+
+
 def load_ui_config(config_path=UI_CONFIG_PATH):
     service_links = []
 
@@ -190,16 +221,36 @@ def load_ui_config(config_path=UI_CONFIG_PATH):
     if not isinstance(raw_links, list):
         return {"service_links": service_links}
 
+    validated_groups = []
+
+    # Preferred schema: grouped links
+    for entry in raw_links:
+        group = validate_service_group(entry)
+        if group:
+            validated_groups.append(group)
+
+    if validated_groups:
+        return {"service_links": validated_groups}
+
+    # Backward-compatible schema: flat link list
     validated_links = []
     for entry in raw_links:
         validated = validate_service_link(entry)
         if validated:
             validated_links.append(validated)
 
-    if not validated_links:
-        return {"service_links": service_links}
+    if validated_links:
+        return {
+            "service_links": [
+                {
+                    "id": "default-group",
+                    "heading": "Services",
+                    "links": validated_links
+                }
+            ]
+        }
 
-    return {"service_links": validated_links}
+    return {"service_links": service_links}
 
 
 # --------------------------------------------------

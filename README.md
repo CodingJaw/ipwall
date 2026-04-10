@@ -96,7 +96,13 @@ Initialize local config from the template:
 cp config/ui_config.example.json config/ui_config.json
 ```
 
-`service_links` is an array. Each row requires:
+`service_links` is an array of groups. Each group requires:
+
+- `id` (string)
+- `heading` (string)
+- `links` (array of link rows)
+
+Each link row requires:
 
 - `id` (string)
 - `label` (string)
@@ -107,7 +113,7 @@ Optional fields:
 - `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
 - `helper_text` (string) — render descriptive helper text above the displayed URL.
 
-Malformed rows are ignored. If the file is missing/invalid or all rows are malformed, the app will render no service links.
+Malformed groups/rows are ignored. If the file is missing/invalid or all rows are malformed, the app will render no service links.
 
 Example:
 
@@ -115,16 +121,33 @@ Example:
 {
   "service_links": [
     {
-      "id": "primary-app",
-      "label": "Open APP",
-      "url": "https://sub.example.com"
+      "id": "app-1",
+      "heading": "The Wonderful App",
+      "links": [
+        {
+          "id": "primary-app",
+          "label": "Open APP",
+          "url": "https://app1.example.com"
+        },
+        {
+          "id": "apps-or-browser",
+          "label": "Apps or Browser",
+          "url": "https://app2.example.com",
+          "copyable": true,
+          "helper_text": "Apps must use this link to connect"
+        }
+      ]
     },
     {
-      "id": "apps-or-browser",
-      "label": "Apps or Browser",
-      "url": "https://sub2.example.com",
-      "copyable": true,
-      "helper_text": "Apps must use this link to connect"
+      "id": "app-2",
+      "heading": "The Beautiful App",
+      "links": [
+        {
+          "id": "another-app",
+          "label": "Open APP",
+          "url": "https://beautiful.example.com"
+        }
+      ]
     }
   ]
 }
