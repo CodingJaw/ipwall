@@ -238,16 +238,37 @@ def validate_service_group(entry):
 
 def load_ui_config(config_path=UI_CONFIG_PATH):
     service_links = []
+    ssh_targets = []
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
     except Exception:
-        return {"service_links": service_links}
+        return {"service_links": service_links, "ssh_targets": ssh_targets}
+
+    raw_targets = raw.get("ssh_targets") if isinstance(raw, dict) else None
+    if isinstance(raw_targets, list):
+        for target in raw_targets:
+            if not isinstance(target, dict):
+                continue
+
+            target_id = target.get("id")
+            target_name = target.get("name")
+
+            if not all(isinstance(v, str) and v.strip() for v in (target_id, target_name)):
+                continue
+
+            if not bool(target.get("enabled", True)):
+                continue
+
+            ssh_targets.append({
+                "id": target_id.strip(),
+                "name": target_name.strip()
+            })
 
     raw_links = raw.get("service_links") if isinstance(raw, dict) else None
     if not isinstance(raw_links, list):
-        return {"service_links": service_links}
+        return {"service_links": service_links, "ssh_targets": ssh_targets}
 
     validated_groups = []
 
@@ -258,7 +279,7 @@ def load_ui_config(config_path=UI_CONFIG_PATH):
             validated_groups.append(group)
 
     if validated_groups:
-        return {"service_links": validated_groups}
+        return {"service_links": validated_groups, "ssh_targets": ssh_targets}
 
     # Backward-compatible schema: flat link list
     validated_links = []
@@ -275,10 +296,11 @@ def load_ui_config(config_path=UI_CONFIG_PATH):
                     "heading": "Services",
                     "links": validated_links
                 }
-            ]
+            ],
+            "ssh_targets": ssh_targets
         }
 
-    return {"service_links": service_links}
+    return {"service_links": service_links, "ssh_targets": ssh_targets}
 
 
 # --------------------------------------------------
@@ -430,10 +452,10 @@ def index():
 
         for entry in user.get("ips", []):
 
-            if entry.get("ssh"):
+            for target in entry.get("ssh_targets", []):
 
-                enabled_time = entry.get("ssh_enabled_time")
-                hours = entry.get("ssh_hours", 4)
+                enabled_time = target.get("ssh_enabled_time")
+                hours = target.get("ssh_hours", 4)
 
                 expires = None
                 status = "Pending"
@@ -456,6 +478,8 @@ def index():
                 active_ssh.append({
                     "email": email,
                     "ip": entry.get("ip"),
+                    "target_id": target.get("target_id"),
+                    "target_name": target.get("target_name", target.get("target_id")),
                     "status": status,
                     "hours": hours,
                     "enabled_time": enabled_time,
@@ -473,6 +497,7 @@ def index():
         is_admin=is_admin(identity["groups"]),
         csrf_token=generate_csrf_token(),
         service_links=ui_config["service_links"],
+        ssh_targets=ui_config["ssh_targets"],
         active_ssh=active_ssh
     )
 
@@ -498,14 +523,22 @@ def add_ip():
 
     now = datetime.utcnow().isoformat()
 
-    ssh_requested = False
+    ssh_target_ids = []
     ssh_hours = 4
+    configured_ssh_targets = {
+        t["id"]: t["name"]
+        for t in load_ui_config().get("ssh_targets", [])
+    }
 
     if is_admin(identity["groups"]):
 
-        if request.form.get("ssh_enable") == "1":
-            ssh_requested = True
+        raw_target_ids = request.form.getlist("ssh_targets")
+        ssh_target_ids = [
+            target_id for target_id in raw_target_ids
+            if target_id in configured_ssh_targets
+        ]
 
+        if ssh_target_ids:
             try:
                 ssh_hours = int(request.form.get("ssh_hours", 4))
             except Exception:
@@ -536,20 +569,29 @@ def add_ip():
 
         if is_admin(identity["groups"]):
 
-            if ssh_requested:
+            if ssh_target_ids:
 
-                existing["ssh"] = True
-                existing["ssh_hours"] = ssh_hours
+                by_target_id = {
+                    t.get("target_id"): t
+                    for t in existing.get("ssh_targets", [])
+                    if isinstance(t, dict) and t.get("target_id")
+                }
 
-                if "enabledssh" not in existing:
-                    existing["enabledssh"] = False
+                existing["ssh_targets"] = []
+
+                for target_id in ssh_target_ids:
+                    existing_target = by_target_id.get(target_id, {})
+                    existing["ssh_targets"].append({
+                        "target_id": target_id,
+                        "target_name": configured_ssh_targets[target_id],
+                        "ssh_hours": ssh_hours,
+                        "enabledssh": bool(existing_target.get("enabledssh", False)),
+                        "ssh_enabled_time": existing_target.get("ssh_enabled_time")
+                    })
 
             else:
 
-                existing.pop("ssh", None)
-                existing.pop("enabledssh", None)
-                existing.pop("ssh_hours", None)
-                existing.pop("ssh_enabled_time", None)
+                existing.pop("ssh_targets", None)
 
         flash("IP refreshed", "success")
 
@@ -560,11 +602,17 @@ def add_ip():
             "last_seen": now
         }
 
-        if ssh_requested:
+        if ssh_target_ids:
 
-            new_entry["ssh"] = True
-            new_entry["ssh_hours"] = ssh_hours
-            new_entry["enabledssh"] = False
+            new_entry["ssh_targets"] = [
+                {
+                    "target_id": target_id,
+                    "target_name": configured_ssh_targets[target_id],
+                    "ssh_hours": ssh_hours,
+                    "enabledssh": False
+                }
+                for target_id in ssh_target_ids
+            ]
 
         user["ips"].append(new_entry)
 
@@ -624,6 +672,7 @@ def revoke_ssh():
         abort(403)
 
     ip = request.form.get("ip")
+    target_id = request.form.get("target_id")
 
     data = load_yaml(USER_DATA_FILE)
 
@@ -632,11 +681,17 @@ def revoke_ssh():
         for entry in user.get("ips", []):
 
             if entry.get("ip") == ip:
+                current_targets = entry.get("ssh_targets", [])
+                if not isinstance(current_targets, list):
+                    continue
 
-                entry.pop("ssh", None)
-                entry.pop("enabledssh", None)
-                entry.pop("ssh_hours", None)
-                entry.pop("ssh_enabled_time", None)
+                entry["ssh_targets"] = [
+                    target for target in current_targets
+                    if target.get("target_id") != target_id
+                ]
+
+                if not entry["ssh_targets"]:
+                    entry.pop("ssh_targets", None)
 
     save_yaml(USER_DATA_FILE, data)
 

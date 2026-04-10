@@ -1,4 +1,16 @@
 {
+  "ssh_targets": [
+    {
+      "id": "main-bastion",
+      "name": "Main Bastion",
+      "enabled": true
+    },
+    {
+      "id": "db-admin",
+      "name": "DB Admin Host",
+      "enabled": true
+    }
+  ],
   "service_links": [
     {
       "id": "app-1",
