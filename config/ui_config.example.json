@@ -1,19 +1,37 @@
 {
+  "_documentation": {
+    "description": "Example UI config for IPWall. Copy this file to ui_config.json and customize values.",
+    "environment": "Set UI_CONFIG_FILE to the in-container path (default: config/ui_config.json).",
+    "ssh_targets_fields": {
+      "id": "Required. Stable machine-readable target key.",
+      "name": "Required. Human-readable target label shown in UI.",
+      "enabled": "Optional boolean (default: true). Disabled targets are ignored.",
+      "remote_host": "Required for remote sync. DNS name or IP.",
+      "remote_user": "Required for remote sync. SSH username.",
+      "remote_port": "Optional integer (default: 22).",
+      "remote_script": "Optional path to remote sync script (default: /usr/local/bin/ipwall-remote-sync)."
+    },
+    "service_links_fields": {
+      "id": "Required. Stable machine-readable group key.",
+      "heading": "Required. Group title shown on dashboard.",
+      "icon": "Optional. Emoji/text or static asset path under src/static/ (e.g. icons/app1.png).",
+      "links": "Required array of link items. Invalid rows are ignored."
+    },
+    "service_link_item_fields": {
+      "id": "Required. Stable machine-readable link key.",
+      "label": "Required. Link display text.",
+      "url": "Required. Destination URL.",
+      "icon": "Optional. Emoji/text or static asset path under src/static/.",
+      "copyable": "Optional boolean. Show copy-to-clipboard button when true.",
+      "helper_text": "Optional text shown above URL for extra context."
+    }
+  },
   "ssh_targets": [
     {
       "id": "main-bastion",
       "name": "Main Bastion",
       "enabled": true,
       "remote_host": "main-bastion.example.com",
-      "remote_user": "ipwall",
-      "remote_port": 22,
-      "remote_script": "/usr/local/bin/ipwall-remote-sync"
-    },
-    {
-      "id": "db-admin",
-      "name": "DB Admin Host",
-      "enabled": true,
-      "remote_host": "db-admin.example.com",
       "remote_user": "ipwall",
       "remote_port": 22,
       "remote_script": "/usr/local/bin/ipwall-remote-sync"
@@ -38,19 +56,6 @@
           "url": "https://app2.example.com",
           "copyable": true,
           "helper_text": "Apps must use this link to connect"
-        }
-      ]
-    },
-    {
-      "id": "app-2",
-      "icon": "✨",
-      "heading": "The Beautiful App",
-      "links": [
-        {
-          "id": "another-app",
-          "icon": "🔗",
-          "label": "Open APP",
-          "url": "https://beautiful.example.com"
         }
       ]
     }

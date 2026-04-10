@@ -31,7 +31,11 @@ IP_WHITELIST_FILE = "ip_whitelist.yml"
 
 IP_EXPIRY_DAYS = 90
 
-UI_CONFIG_PATH = os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
+UI_CONFIG_FILE = os.environ.get(
+    "UI_CONFIG_FILE",
+    os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
+)
+DEFAULT_UI_CONFIG = {"service_links": [], "ssh_targets": []}
 
 # --------------------------------------------------
 # Trusted Proxy Enforcement
@@ -238,15 +242,33 @@ def validate_service_group(entry):
     return validated_group
 
 
-def load_ui_config(config_path=UI_CONFIG_PATH):
+def load_ui_config(config_path=UI_CONFIG_FILE):
     service_links = []
     ssh_targets = []
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
-    except Exception:
-        return {"service_links": service_links, "ssh_targets": ssh_targets}
+    except FileNotFoundError:
+        app.logger.warning(
+            "UI config file not found at '%s'; using built-in defaults",
+            config_path
+        )
+        return dict(DEFAULT_UI_CONFIG)
+    except json.JSONDecodeError as exc:
+        app.logger.warning(
+            "UI config file '%s' is invalid JSON (%s); using built-in defaults",
+            config_path,
+            exc
+        )
+        return dict(DEFAULT_UI_CONFIG)
+    except Exception as exc:
+        app.logger.warning(
+            "Failed to load UI config file '%s' (%s); using built-in defaults",
+            config_path,
+            exc
+        )
+        return dict(DEFAULT_UI_CONFIG)
 
     raw_targets = raw.get("ssh_targets") if isinstance(raw, dict) else None
     if isinstance(raw_targets, list):
@@ -302,7 +324,11 @@ def load_ui_config(config_path=UI_CONFIG_PATH):
             "ssh_targets": ssh_targets
         }
 
-    return {"service_links": service_links, "ssh_targets": ssh_targets}
+    app.logger.warning(
+        "UI config file '%s' has no valid service links; using default empty links",
+        config_path
+    )
+    return {"service_links": [], "ssh_targets": ssh_targets}
 
 
 # --------------------------------------------------

@@ -5,7 +5,10 @@ import subprocess
 from datetime import datetime, timezone
 
 
-UI_CONFIG_PATH = os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
+UI_CONFIG_FILE = os.environ.get(
+    "UI_CONFIG_FILE",
+    os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
+)
 REMOTE_SYNC_LOG_FILE = os.environ.get("REMOTE_SYNC_LOG_FILE", "remote_sync_results.log")
 REMOTE_SYNC_TIMEOUT_SECONDS = int(os.environ.get("REMOTE_SYNC_TIMEOUT_SECONDS", "10"))
 REMOTE_SYNC_SCRIPT = os.environ.get("REMOTE_SYNC_SCRIPT", "/usr/local/bin/ipwall-remote-sync")
@@ -16,7 +19,7 @@ def _utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load_config(path=UI_CONFIG_PATH):
+def _load_config(path=UI_CONFIG_FILE):
     try:
         with open(path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
@@ -25,7 +28,7 @@ def _load_config(path=UI_CONFIG_PATH):
         return {}
 
 
-def load_target_map(path=UI_CONFIG_PATH):
+def load_target_map(path=UI_CONFIG_FILE):
     target_map = {}
     raw = _load_config(path)
 
