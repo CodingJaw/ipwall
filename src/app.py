@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import yaml
 import secrets
 import ipaddress
@@ -28,8 +29,7 @@ IP_WHITELIST_FILE = "ip_whitelist.yml"
 
 IP_EXPIRY_DAYS = 90
 
-SUB_URL = os.environ.get("SUB_URL", "https://sub.example.com")
-SUB2_URL = os.environ.get("SUB2_URL", "https://sub2.example.com")
+UI_CONFIG_PATH = os.environ.get("UI_CONFIG_PATH", "config/ui_config.json")
 
 # --------------------------------------------------
 # Trusted Proxy Enforcement
@@ -145,6 +145,140 @@ def get_identity():
 
 def is_admin(groups):
     return "admin" in groups
+
+
+# --------------------------------------------------
+# UI Config
+# --------------------------------------------------
+
+def validate_service_link(entry):
+
+    if not isinstance(entry, dict):
+        return None
+
+    link_id = entry.get("id")
+    label = entry.get("label")
+    url = entry.get("url")
+
+    if not all(isinstance(v, str) and v.strip() for v in (link_id, label, url)):
+        return None
+
+    validated = {
+        "id": link_id.strip(),
+        "label": label.strip(),
+        "url": url.strip(),
+        "copyable": bool(entry.get("copyable", False))
+    }
+
+    icon = entry.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        normalized_icon = icon.strip()
+        lower_icon = normalized_icon.lower()
+        if lower_icon.startswith("static/"):
+            normalized_icon = normalized_icon[7:]
+            lower_icon = normalized_icon.lower()
+
+        if lower_icon.endswith((".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".ico")):
+            validated["icon_static"] = normalized_icon.lstrip("/")
+        else:
+            validated["icon"] = normalized_icon
+
+    helper_text = entry.get("helper_text")
+    if isinstance(helper_text, str) and helper_text.strip():
+        validated["helper_text"] = helper_text.strip()
+
+    return validated
+
+
+def validate_service_group(entry):
+
+    if not isinstance(entry, dict):
+        return None
+
+    group_id = entry.get("id")
+    heading = entry.get("heading")
+    links = entry.get("links")
+
+    if not all(isinstance(v, str) and v.strip() for v in (group_id, heading)):
+        return None
+
+    if not isinstance(links, list):
+        return None
+
+    validated_links = []
+    for link in links:
+        validated = validate_service_link(link)
+        if validated:
+            validated_links.append(validated)
+
+    if not validated_links:
+        return None
+
+    validated_group = {
+        "id": group_id.strip(),
+        "heading": heading.strip(),
+        "links": validated_links
+    }
+
+    icon = entry.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        normalized_icon = icon.strip()
+        lower_icon = normalized_icon.lower()
+        if lower_icon.startswith("static/"):
+            normalized_icon = normalized_icon[7:]
+            lower_icon = normalized_icon.lower()
+
+        if lower_icon.endswith((".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".ico")):
+            validated_group["icon_static"] = normalized_icon.lstrip("/")
+        else:
+            validated_group["icon"] = normalized_icon
+
+    return validated_group
+
+
+def load_ui_config(config_path=UI_CONFIG_PATH):
+    service_links = []
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {"service_links": service_links}
+
+    raw_links = raw.get("service_links") if isinstance(raw, dict) else None
+    if not isinstance(raw_links, list):
+        return {"service_links": service_links}
+
+    validated_groups = []
+
+    # Preferred schema: grouped links
+    for entry in raw_links:
+        group = validate_service_group(entry)
+        if group:
+            validated_groups.append(group)
+
+    if validated_groups:
+        return {"service_links": validated_groups}
+
+    # Backward-compatible schema: flat link list
+    validated_links = []
+    for entry in raw_links:
+        validated = validate_service_link(entry)
+        if validated:
+            validated_links.append(validated)
+
+    if validated_links:
+        return {
+            "service_links": [
+                {
+                    "id": "default-group",
+                    "heading": "Services",
+                    "links": validated_links
+                }
+            ]
+        }
+
+    return {"service_links": service_links}
 
 
 # --------------------------------------------------
@@ -328,6 +462,8 @@ def index():
                     "expires": expires.isoformat() if expires else None
                 })
 
+    ui_config = load_ui_config()
+
     return render_template(
         "index.html",
         user_data=identity,
@@ -336,8 +472,7 @@ def index():
         expiry_days=IP_EXPIRY_DAYS,
         is_admin=is_admin(identity["groups"]),
         csrf_token=generate_csrf_token(),
-        sub_url=SUB_URL,
-        sub2_url=SUB2_URL,
+        service_links=ui_config["service_links"],
         active_ssh=active_ssh
     )
 

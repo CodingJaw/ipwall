@@ -54,6 +54,8 @@ docker build -t ipwall .
 docker run --rm -p 8080:8080 \
   -e FLASK_SECRET_KEY='change-me' \
   -e TRUSTED_PROXY_CIDR='0.0.0.0/0' \
+  -e UI_CONFIG_PATH='/app/config/ui_config.json' \
+  -v $(pwd)/config/ui_config.json:/app/config/ui_config.json:ro \
   ipwall
 ```
 
@@ -82,8 +84,91 @@ Admin behavior is enabled when `admin` appears in `X-Auth-Request-Groups`.
 |---|---|---|
 | `FLASK_SECRET_KEY` | random generated at startup | Flask session/CSRF signing key |
 | `TRUSTED_PROXY_CIDR` | `172.20.0.0/16` | Allowed source range for reverse proxy |
-| `SUB_URL` | `https://sub.example.com` | Primary service link shown in UI |
-| `SUB2_URL` | `https://sub2.example.com` | Secondary/copyable service link shown in UI |
+| `UI_CONFIG_PATH` | `config/ui_config.json` | Path to JSON UI config containing dashboard service links |
+
+## UI service links config
+
+The dashboard "Services" section is loaded from JSON at `UI_CONFIG_PATH` (default `config/ui_config.json`).
+
+Initialize local config from the template:
+
+```bash
+cp config/ui_config.example.json config/ui_config.json
+```
+
+`service_links` is an array of groups. Each group requires:
+
+- `id` (string)
+- `heading` (string)
+- `links` (array of link rows)
+
+Each link row requires:
+
+- `id` (string)
+- `label` (string)
+- `url` (string)
+
+Optional fields:
+
+- `icon` (string) — text/emoji shown before heading or link label, or an image path such as `icons/app1.png` (resolved under Flask `static/`).
+- `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
+- `helper_text` (string) — render descriptive helper text above the displayed URL.
+
+Malformed groups/rows are ignored. If the file is missing/invalid or all rows are malformed, the app will render no service links.
+
+Example:
+
+```json
+{
+  "service_links": [
+    {
+      "id": "app-1",
+      "icon": "icons/app1.png",
+      "heading": "The Wonderful App",
+      "links": [
+        {
+          "id": "primary-app",
+          "icon": "icons/open.png",
+          "label": "Open APP",
+          "url": "https://app1.example.com"
+        },
+        {
+          "id": "apps-or-browser",
+          "icon": "📋",
+          "label": "Apps or Browser",
+          "url": "https://app2.example.com",
+          "copyable": true,
+          "helper_text": "Apps must use this link to connect"
+        }
+      ]
+    },
+    {
+      "id": "app-2",
+      "icon": "✨",
+      "heading": "The Beautiful App",
+      "links": [
+        {
+          "id": "another-app",
+          "icon": "🔗",
+          "label": "Open APP",
+          "url": "https://beautiful.example.com"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`icon` accepts either:
+- Text/emoji (for example `"🚀"`), or
+- Static file path (for example `"icons/app1.png"` or `"static/icons/app1.png"`), rendered via Flask `url_for('static', ...)`.
+
+### Docker deployment notes
+
+- This repo ships `config/ui_config.example.json` as a template.
+- Create your real config as `config/ui_config.json` (gitignored) so future pulls do not overwrite it.
+- To customize links without rebuilding, bind mount your config file and set `UI_CONFIG_PATH` if you use a different location.
+- Recommended mount: `-v /path/on/host/ui_config.json:/app/config/ui_config.json:ro`.
 
 ## Data files
 

@@ -249,32 +249,68 @@ IPs expire automatically after {{ expiry_days }} days of inactivity.
 
 <h5 class="card-title mb-3">Services</h5>
 
+{% if service_links and service_links|length > 0 %}
+<div class="d-grid gap-3">
+
+{% for group in service_links %}
+<div class="card border-secondary-subtle">
+<div class="card-body">
+
+<h6 class="card-title mb-3">
+{% if group.icon_static %}
+<img src="{{ url_for('static', filename=group.icon_static) }}"
+alt=""
+height="18"
+class="me-2 align-text-bottom">
+{% elif group.icon %}
+<span class="me-2">{{ group.icon }}</span>
+{% endif %}
+{{ group.heading }}
+</h6>
+
 <div class="d-grid gap-2">
 
-<a class="btn btn-outline-primary" href="{{ sub_url }}">
-Open APP
+{% for service in group.links %}
+
+<a class="btn btn-outline-primary" href="{{ service.url }}">
+{% if service.icon_static %}
+<img src="{{ url_for('static', filename=service.icon_static) }}"
+alt=""
+height="18"
+class="me-2 align-text-bottom">
+{% elif service.icon %}
+<span class="me-2">{{ service.icon }}</span>
+{% endif %}
+{{ service.label }}
 </a>
 
-<a class="btn btn-outline-success" href="{{ sub2_url }}">
-Apps or Browser
-</a>
-
+{% if service.copyable %}
 <button class="btn btn-outline-secondary copy-btn"
-data-copy="{{ sub2_url }}">
+data-copy="{{ service.url }}">
 Copy Link to Clipboard
 </button>
+{% endif %}
 
-<div class="text-center my-4">
-
+{% if service.helper_text %}
+<div class="text-center my-2">
 <div class="fw-semibold mb-2">
-Apps must use this link to connect
+{{ service.helper_text }}
+</div>
+<code class="fs-6 user-select-all">{{ service.url }}</code>
+</div>
+{% endif %}
+
+{% endfor %}
+
 </div>
 
-<code class="fs-6 user-select-all">{{ sub2_url }}</code>
-
 </div>
-
 </div>
+{% endfor %}
+</div>
+{% else %}
+<div class="text-muted">No service links configured.</div>
+{% endif %}
 
 </div>
 
