@@ -126,6 +126,21 @@ def ssh_expired(entry):
         return False
 
 
+def ssh_target_expired(target):
+
+    if "ssh_enabled_time" not in target:
+        return False
+
+    hours = target.get("ssh_hours", DEFAULT_SSH_HOURS)
+
+    try:
+        start = datetime.fromisoformat(target["ssh_enabled_time"])
+        expire = start + timedelta(hours=hours)
+        return utcnow() > expire
+    except Exception:
+        return False
+
+
 # --------------------------------------------------
 # Rebuild firewall chain deterministically
 # --------------------------------------------------
@@ -183,37 +198,59 @@ def main():
             if not ip:
                 continue
 
-            # Only process ssh:true entries
-            if entry.get("ssh") is not True:
+            # New per-target SSH model
+            if isinstance(entry.get("ssh_targets"), list):
+                updated_targets = []
+
+                for target in entry.get("ssh_targets", []):
+                    if not isinstance(target, dict):
+                        continue
+
+                    target_id = target.get("target_id", "unknown")
+                    target_label = f"{ip}:{target_id}"
+
+                    if ssh_target_expired(target):
+                        log_event("EXPIRE", email, target_label)
+                        yaml_changed = True
+                        continue
+
+                    updated_targets.append(target)
+                    allowed_ips.add(ip)
+
+                    if not target.get("enabledssh"):
+                        target["enabledssh"] = True
+                        target["ssh_enabled_time"] = utcnow().isoformat()
+                        hours = target.get("ssh_hours", DEFAULT_SSH_HOURS)
+                        log_event("ENABLE", email, target_label, hours)
+                        yaml_changed = True
+
+                if updated_targets != entry.get("ssh_targets", []):
+                    entry["ssh_targets"] = updated_targets
+
+                if not entry.get("ssh_targets"):
+                    entry.pop("ssh_targets", None)
+
                 continue
 
-            # Check expiration
-            if ssh_expired(entry):
+            # Backward-compatible single-target model
+            if entry.get("ssh") is True:
+                if ssh_expired(entry):
+                    log_event("EXPIRE", email, ip)
+                    entry.pop("ssh", None)
+                    entry.pop("enabledssh", None)
+                    entry.pop("ssh_hours", None)
+                    entry.pop("ssh_enabled_time", None)
+                    yaml_changed = True
+                    continue
 
-                log_event("EXPIRE", email, ip)
+                allowed_ips.add(ip)
 
-                entry.pop("ssh", None)
-                entry.pop("enabledssh", None)
-                entry.pop("ssh_hours", None)
-                entry.pop("ssh_enabled_time", None)
-
-                yaml_changed = True
-
-                continue
-
-            allowed_ips.add(ip)
-
-            # First activation
-            if not entry.get("enabledssh"):
-
-                entry["enabledssh"] = True
-                entry["ssh_enabled_time"] = utcnow().isoformat()
-
-                hours = entry.get("ssh_hours", DEFAULT_SSH_HOURS)
-
-                log_event("ENABLE", email, ip, hours)
-
-                yaml_changed = True
+                if not entry.get("enabledssh"):
+                    entry["enabledssh"] = True
+                    entry["ssh_enabled_time"] = utcnow().isoformat()
+                    hours = entry.get("ssh_hours", DEFAULT_SSH_HOURS)
+                    log_event("ENABLE", email, ip, hours)
+                    yaml_changed = True
 
     # Rebuild firewall rules
     rebuild_chain(allowed_ips)

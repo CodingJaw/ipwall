@@ -90,22 +90,25 @@ Toggle Dark Mode
 
 <div class="row g-2 align-items-center">
 
-<div class="col-auto">
-
+<div class="col-12">
+<div class="text-muted small mb-1">SSH targets (shared duration applies to all selected targets)</div>
+<div class="d-flex flex-wrap gap-3">
+{% for target in ssh_targets %}
 <div class="form-check">
-
 <input class="form-check-input"
 type="checkbox"
-name="ssh_enable"
-value="1"
-id="sshEnable">
-
-<label class="form-check-label" for="sshEnable">
-Enable SSH
+name="ssh_targets"
+value="{{ target.id }}"
+id="sshTarget{{ loop.index }}">
+<label class="form-check-label" for="sshTarget{{ loop.index }}">
+{{ target.name }}
 </label>
-
 </div>
-
+{% endfor %}
+{% if not ssh_targets %}
+<div class="text-muted small">No SSH targets configured.</div>
+{% endif %}
+</div>
 </div>
 
 <div class="col-auto">
@@ -164,23 +167,17 @@ Add / Refresh Current IP
 
 {{ entry.ip }}
 
-{% if entry.ssh %}
-
-{% if entry.enabledssh %}
-
+{% for target in entry.ssh_targets or [] %}
+{% if target.enabledssh %}
 <span class="badge bg-success ms-2">
-SSH Enabled ({{ entry.ssh_hours }}h)
+SSH {{ target.target_name }} Enabled ({{ target.ssh_hours }}h)
 </span>
-
 {% else %}
-
 <span class="badge bg-warning text-dark ms-2">
-SSH Pending ({{ entry.ssh_hours }}h)
+SSH {{ target.target_name }} Pending ({{ target.ssh_hours }}h)
 </span>
-
 {% endif %}
-
-{% endif %}
+{% endfor %}
 
 </div>
 
@@ -194,19 +191,17 @@ Last seen: {{ entry.last_seen }}
 
 <div class="d-flex gap-2">
 
-{% if is_admin and entry.ssh %}
-
+{% if is_admin and entry.ssh_targets %}
+{% for target in entry.ssh_targets %}
 <form action="/revoke_ssh" method="post">
-
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="ip" value="{{ entry.ip }}">
-
+<input type="hidden" name="target_id" value="{{ target.target_id }}">
 <button class="btn btn-sm btn-outline-warning">
-Revoke SSH
+Revoke SSH {{ target.target_name }}
 </button>
-
 </form>
-
+{% endfor %}
 {% endif %}
 
 <form action="/remove_ip" method="post">
@@ -337,6 +332,7 @@ Copy Link to Clipboard
 <tr>
 <th>Email</th>
 <th>IP</th>
+<th>Target</th>
 <th>Status</th>
 <th>Duration</th>
 <th>Remaining</th>
@@ -353,6 +349,7 @@ Copy Link to Clipboard
 <td>{{ s.email }}</td>
 
 <td>{{ s.ip }}</td>
+<td>{{ s.target_name }}</td>
 
 <td>
 
