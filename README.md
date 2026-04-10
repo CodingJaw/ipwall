@@ -54,12 +54,12 @@ docker build -t ipwall .
 docker run --rm -p 8080:8080 \
   -e FLASK_SECRET_KEY='change-me' \
   -e TRUSTED_PROXY_CIDR='0.0.0.0/0' \
-  -e UI_CONFIG_PATH='/app/config/ui_config.json' \
+  -e UI_CONFIG_FILE='/app/config/ui_config.json' \
   -v $(pwd)/config/ui_config.json:/app/config/ui_config.json:ro \
   ipwall
 ```
 
-The provided `Dockerfile` uses `python:3.11-alpine`, copies the repo into `/app`, installs requirements, and starts `python src/app.py`.
+The provided `Dockerfile` uses `python:3.11-alpine`, copies the repo into `/app`, installs requirements, copies `config/ui_config.example.json` to `config/ui_config.json` as the in-image default, and starts `python src/app.py`.
 
 ## Authentication and proxy expectations
 
@@ -84,11 +84,12 @@ Admin behavior is enabled when `admin` appears in `X-Auth-Request-Groups`.
 |---|---|---|
 | `FLASK_SECRET_KEY` | random generated at startup | Flask session/CSRF signing key |
 | `TRUSTED_PROXY_CIDR` | `172.20.0.0/16` | Allowed source range for reverse proxy |
-| `UI_CONFIG_PATH` | `config/ui_config.json` | Path to JSON UI config containing dashboard service links |
+| `UI_CONFIG_FILE` | `config/ui_config.json` | Path to JSON UI config containing dashboard service links and SSH targets |
+| `UI_CONFIG_PATH` | `config/ui_config.json` | Backward-compatible alias for `UI_CONFIG_FILE` |
 
 ## UI service links config
 
-The dashboard "Services" section is loaded from JSON at `UI_CONFIG_PATH` (default `config/ui_config.json`).
+The dashboard "Services" section and SSH target options are loaded from JSON at `UI_CONFIG_FILE` (default `config/ui_config.json`; falls back to `UI_CONFIG_PATH` for backward compatibility).
 
 Initialize local config from the template:
 
@@ -114,7 +115,7 @@ Optional fields:
 - `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
 - `helper_text` (string) — render descriptive helper text above the displayed URL.
 
-Malformed groups/rows are ignored. If the file is missing/invalid or all rows are malformed, the app will render no service links.
+Malformed groups/rows are ignored. If the file is missing/invalid, IPWall logs a warning and falls back to built-in defaults (empty service links + empty SSH targets).
 
 Example:
 
@@ -166,9 +167,23 @@ Example:
 ### Docker deployment notes
 
 - This repo ships `config/ui_config.example.json` as a template.
+- The Docker image copies this template to `/app/config/ui_config.json` during build as the runtime default.
 - Create your real config as `config/ui_config.json` (gitignored) so future pulls do not overwrite it.
-- To customize links without rebuilding, bind mount your config file and set `UI_CONFIG_PATH` if you use a different location.
+- To customize links/SSH targets without rebuilding, bind mount your config file and set `UI_CONFIG_FILE` if you use a different in-container location.
 - Recommended mount: `-v /path/on/host/ui_config.json:/app/config/ui_config.json:ro`.
+
+### Inject a custom UI config at runtime
+
+Use a bind mount to provide a custom config file from the host:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e FLASK_SECRET_KEY='change-me' \
+  -e TRUSTED_PROXY_CIDR='0.0.0.0/0' \
+  -e UI_CONFIG_FILE='/app/config/custom-ui.json' \
+  -v /path/on/host/ui_config.json:/app/config/custom-ui.json:ro \
+  ipwall
+```
 
 ## Data files
 
