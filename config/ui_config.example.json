@@ -2,12 +2,12 @@
   "service_links": [
     {
       "id": "app-1",
-      "icon": "🚀",
+      "icon": "icons/app1.png",
       "heading": "The Wonderful App",
       "links": [
         {
           "id": "primary-app",
-          "icon": "🌐",
+          "icon": "icons/open.png",
           "label": "Open APP",
           "url": "https://app1.example.com"
         },

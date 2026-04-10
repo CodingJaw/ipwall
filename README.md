@@ -110,7 +110,7 @@ Each link row requires:
 
 Optional fields:
 
-- `icon` (string) — text/emoji shown before heading or link label.
+- `icon` (string) — text/emoji shown before heading or link label, or an image path such as `icons/app1.png` (resolved under Flask `static/`).
 - `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
 - `helper_text` (string) — render descriptive helper text above the displayed URL.
 
@@ -123,12 +123,12 @@ Example:
   "service_links": [
     {
       "id": "app-1",
-      "icon": "🚀",
+      "icon": "icons/app1.png",
       "heading": "The Wonderful App",
       "links": [
         {
           "id": "primary-app",
-          "icon": "🌐",
+          "icon": "icons/open.png",
           "label": "Open APP",
           "url": "https://app1.example.com"
         },
@@ -158,6 +158,10 @@ Example:
   ]
 }
 ```
+
+`icon` accepts either:
+- Text/emoji (for example `"🚀"`), or
+- Static file path (for example `"icons/app1.png"` or `"static/icons/app1.png"`), rendered via Flask `url_for('static', ...)`.
 
 ### Docker deployment notes
 

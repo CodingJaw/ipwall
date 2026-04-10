@@ -172,7 +172,16 @@ def validate_service_link(entry):
 
     icon = entry.get("icon")
     if isinstance(icon, str) and icon.strip():
-        validated["icon"] = icon.strip()
+        normalized_icon = icon.strip()
+        lower_icon = normalized_icon.lower()
+        if lower_icon.startswith("static/"):
+            normalized_icon = normalized_icon[7:]
+            lower_icon = normalized_icon.lower()
+
+        if lower_icon.endswith((".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".ico")):
+            validated["icon_static"] = normalized_icon.lstrip("/")
+        else:
+            validated["icon"] = normalized_icon
 
     helper_text = entry.get("helper_text")
     if isinstance(helper_text, str) and helper_text.strip():
@@ -213,7 +222,16 @@ def validate_service_group(entry):
 
     icon = entry.get("icon")
     if isinstance(icon, str) and icon.strip():
-        validated_group["icon"] = icon.strip()
+        normalized_icon = icon.strip()
+        lower_icon = normalized_icon.lower()
+        if lower_icon.startswith("static/"):
+            normalized_icon = normalized_icon[7:]
+            lower_icon = normalized_icon.lower()
+
+        if lower_icon.endswith((".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".ico")):
+            validated_group["icon_static"] = normalized_icon.lstrip("/")
+        else:
+            validated_group["icon"] = normalized_icon
 
     return validated_group
 
