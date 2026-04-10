@@ -170,6 +170,10 @@ def validate_service_link(entry):
         "copyable": bool(entry.get("copyable", False))
     }
 
+    icon = entry.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        validated["icon"] = icon.strip()
+
     helper_text = entry.get("helper_text")
     if isinstance(helper_text, str) and helper_text.strip():
         validated["helper_text"] = helper_text.strip()
@@ -201,11 +205,17 @@ def validate_service_group(entry):
     if not validated_links:
         return None
 
-    return {
+    validated_group = {
         "id": group_id.strip(),
         "heading": heading.strip(),
         "links": validated_links
     }
+
+    icon = entry.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        validated_group["icon"] = icon.strip()
+
+    return validated_group
 
 
 def load_ui_config(config_path=UI_CONFIG_PATH):

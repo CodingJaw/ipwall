@@ -256,14 +256,16 @@ IPs expire automatically after {{ expiry_days }} days of inactivity.
 <div class="card border-secondary-subtle">
 <div class="card-body">
 
-<h6 class="card-title mb-3">{{ group.heading }}</h6>
+<h6 class="card-title mb-3">
+{% if group.icon %}<span class="me-2">{{ group.icon }}</span>{% endif %}{{ group.heading }}
+</h6>
 
 <div class="d-grid gap-2">
 
 {% for service in group.links %}
 
 <a class="btn btn-outline-primary" href="{{ service.url }}">
-{{ service.label }}
+{% if service.icon %}<span class="me-2">{{ service.icon }}</span>{% endif %}{{ service.label }}
 </a>
 
 {% if service.copyable %}

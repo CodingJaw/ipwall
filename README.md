@@ -110,6 +110,7 @@ Each link row requires:
 
 Optional fields:
 
+- `icon` (string) — text/emoji shown before heading or link label.
 - `copyable` (boolean) — render "Copy Link to Clipboard" button when `true`.
 - `helper_text` (string) — render descriptive helper text above the displayed URL.
 
@@ -122,15 +123,18 @@ Example:
   "service_links": [
     {
       "id": "app-1",
+      "icon": "🚀",
       "heading": "The Wonderful App",
       "links": [
         {
           "id": "primary-app",
+          "icon": "🌐",
           "label": "Open APP",
           "url": "https://app1.example.com"
         },
         {
           "id": "apps-or-browser",
+          "icon": "📋",
           "label": "Apps or Browser",
           "url": "https://app2.example.com",
           "copyable": true,
@@ -140,10 +144,12 @@ Example:
     },
     {
       "id": "app-2",
+      "icon": "✨",
       "heading": "The Beautiful App",
       "links": [
         {
           "id": "another-app",
+          "icon": "🔗",
           "label": "Open APP",
           "url": "https://beautiful.example.com"
         }

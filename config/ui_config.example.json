@@ -2,15 +2,18 @@
   "service_links": [
     {
       "id": "app-1",
+      "icon": "🚀",
       "heading": "The Wonderful App",
       "links": [
         {
           "id": "primary-app",
+          "icon": "🌐",
           "label": "Open APP",
           "url": "https://app1.example.com"
         },
         {
           "id": "apps-or-browser",
+          "icon": "📋",
           "label": "Apps or Browser",
           "url": "https://app2.example.com",
           "copyable": true,
@@ -20,10 +23,12 @@
     },
     {
       "id": "app-2",
+      "icon": "✨",
       "heading": "The Beautiful App",
       "links": [
         {
           "id": "another-app",
+          "icon": "🔗",
           "label": "Open APP",
           "url": "https://beautiful.example.com"
         }
