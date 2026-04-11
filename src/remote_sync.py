@@ -29,39 +29,75 @@ def _load_config(path=UI_CONFIG_FILE):
         return {}
 
 
+def _parse_sync_target(target):
+    if not isinstance(target, dict):
+        return None, "target must be an object"
+
+    target_id = target.get("id")
+    if not isinstance(target_id, str) or not target_id.strip():
+        return None, "target id is required"
+
+    if not bool(target.get("enabled", True)):
+        return None, "target disabled"
+
+    is_localhost = target.get("localhost") is True
+    has_remote_fields = any(
+        key in target for key in ("remote_host", "remote_user", "remote_port", "remote_script")
+    )
+
+    if is_localhost:
+        if has_remote_fields:
+            return None, "localhost target cannot define remote_* fields"
+        return {
+            "id": target_id.strip(),
+            "type": "local",
+            "script": REMOTE_SYNC_SCRIPT,
+        }, None
+
+    if "localhost" in target:
+        return None, "localhost must be literal true when provided"
+
+    host = target.get("remote_host")
+    user = target.get("remote_user")
+    if not all(isinstance(v, str) and v.strip() for v in (host, user)):
+        return None, "remote target requires remote_host and remote_user"
+
+    port = target.get("remote_port", 22)
+    try:
+        port = int(port)
+    except Exception:
+        return None, "remote_port must be an integer"
+
+    if port < 1 or port > 65535:
+        return None, "remote_port must be between 1 and 65535"
+
+    return {
+        "id": target_id.strip(),
+        "type": "remote",
+        "host": host.strip(),
+        "user": user.strip(),
+        "port": port,
+        "script": str(target.get("remote_script", REMOTE_SYNC_SCRIPT)).strip() or REMOTE_SYNC_SCRIPT,
+    }, None
+
+
 def load_target_map(path=UI_CONFIG_FILE):
     target_map = {}
     raw = _load_config(path)
+    allow_multiple_localhost_targets = bool(raw.get("allow_multiple_localhost_targets", False))
+    localhost_seen = False
 
     for target in raw.get("ssh_targets", []):
-        if not isinstance(target, dict):
+        parsed_target, _ = _parse_sync_target(target)
+        if not parsed_target:
             continue
 
-        if not bool(target.get("enabled", True)):
-            continue
+        if parsed_target["type"] == "local":
+            if localhost_seen and not allow_multiple_localhost_targets:
+                continue
+            localhost_seen = True
 
-        target_id = target.get("id")
-        host = target.get("remote_host")
-        user = target.get("remote_user")
-        port = target.get("remote_port", 22)
-
-        if not all(isinstance(v, str) and v.strip() for v in (target_id, host, user)):
-            continue
-
-        try:
-            port = int(port)
-        except Exception:
-            continue
-
-        if port < 1 or port > 65535:
-            continue
-
-        target_map[target_id.strip()] = {
-            "host": host.strip(),
-            "user": user.strip(),
-            "port": port,
-            "script": str(target.get("remote_script", REMOTE_SYNC_SCRIPT)).strip() or REMOTE_SYNC_SCRIPT,
-        }
+        target_map[parsed_target["id"]] = parsed_target
 
     return target_map
 
@@ -204,7 +240,83 @@ def _validate_remote_response(stdout, expected_ips):
     return parsed, None
 
 
-def _run_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
+def _run_local_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
+    expected_count = len(ips)
+    request_id = str(uuid.uuid4())
+    base = {
+        "timestamp": _utc_now_iso(),
+        "correlation_id": correlation_id,
+        "target_id": target_id,
+        "expected_count": expected_count,
+        "requester_email": requester_email,
+    }
+
+    payload = {
+        "chain": REMOTE_SYNC_CHAIN,
+        "ips": ips,
+        "request_id": request_id,
+        "target_id": target_id,
+    }
+
+    cmd = [target["script"]]
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+
+        stderr = (completed.stderr or "").strip()
+        response, response_error = _validate_remote_response(completed.stdout, ips)
+        local_ok = bool(response and response.get("ok"))
+
+        if completed.returncode == 0 and local_ok and response_error is None:
+            result = {
+                **base,
+                "status": "success",
+                "message": "localhost update applied and verified",
+            }
+        else:
+            error_parts = []
+            if completed.returncode != 0:
+                error_parts.append(f"localhost command exited {completed.returncode}")
+            if response_error:
+                error_parts.append(response_error)
+            if response and not local_ok:
+                errors = response.get("errors", [])
+                if errors:
+                    error_parts.append(f"localhost errors={errors}")
+            if stderr:
+                error_parts.append(f"stderr={stderr[:300]}")
+
+            result = {
+                **base,
+                "status": "failure",
+                "message": "; ".join(error_parts)[:700] or "localhost command failed",
+            }
+
+    except subprocess.TimeoutExpired:
+        result = {
+            **base,
+            "status": "failure",
+            "message": "localhost command timed out",
+        }
+    except Exception as exc:
+        result = {
+            **base,
+            "status": "failure",
+            "message": f"localhost command error: {exc}",
+        }
+
+    _write_result_log(result)
+    return result
+
+
+def _run_remote_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
     expected_count = len(ips)
     request_id = str(uuid.uuid4())
     base = {
@@ -290,6 +402,27 @@ def _run_target_state(requester_email, target_id, ips, target, timeout_seconds, 
 
     _write_result_log(result)
     return result
+
+
+def _run_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
+    if target.get("type") == "local":
+        return _run_local_target_state(
+            requester_email=requester_email,
+            target_id=target_id,
+            ips=ips,
+            target=target,
+            timeout_seconds=timeout_seconds,
+            correlation_id=correlation_id,
+        )
+
+    return _run_remote_target_state(
+        requester_email=requester_email,
+        target_id=target_id,
+        ips=ips,
+        target=target,
+        timeout_seconds=timeout_seconds,
+        correlation_id=correlation_id,
+    )
 
 
 def sync_targets(action, requester_email, ip, target_ids, timeout_seconds=REMOTE_SYNC_TIMEOUT_SECONDS):

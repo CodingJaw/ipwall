@@ -242,6 +242,52 @@ def validate_service_group(entry):
     return validated_group
 
 
+def validate_ssh_target(entry):
+    if not isinstance(entry, dict):
+        return None
+
+    target_id = entry.get("id")
+    target_name = entry.get("name")
+
+    if not all(isinstance(v, str) and v.strip() for v in (target_id, target_name)):
+        return None
+
+    if not bool(entry.get("enabled", True)):
+        return None
+
+    is_localhost = entry.get("localhost") is True
+    has_remote_fields = any(
+        key in entry for key in ("remote_host", "remote_user", "remote_port", "remote_script")
+    )
+
+    if is_localhost and has_remote_fields:
+        return None
+
+    if not is_localhost:
+        if "localhost" in entry:
+            return None
+
+        if not all(
+            isinstance(v, str) and v.strip()
+            for v in (entry.get("remote_host"), entry.get("remote_user"))
+        ):
+            return None
+
+        port = entry.get("remote_port", 22)
+        try:
+            port = int(port)
+        except Exception:
+            return None
+        if port < 1 or port > 65535:
+            return None
+
+    return {
+        "id": target_id.strip(),
+        "name": target_name.strip(),
+        "localhost": is_localhost,
+    }
+
+
 def load_ui_config(config_path=UI_CONFIG_FILE):
     service_links = []
     ssh_targets = []
@@ -271,23 +317,22 @@ def load_ui_config(config_path=UI_CONFIG_FILE):
         return dict(DEFAULT_UI_CONFIG)
 
     raw_targets = raw.get("ssh_targets") if isinstance(raw, dict) else None
+    allow_multiple_localhost_targets = bool(raw.get("allow_multiple_localhost_targets", False))
+    localhost_seen = False
     if isinstance(raw_targets, list):
         for target in raw_targets:
-            if not isinstance(target, dict):
+            validated_target = validate_ssh_target(target)
+            if not validated_target:
                 continue
 
-            target_id = target.get("id")
-            target_name = target.get("name")
-
-            if not all(isinstance(v, str) and v.strip() for v in (target_id, target_name)):
-                continue
-
-            if not bool(target.get("enabled", True)):
-                continue
+            if validated_target["localhost"]:
+                if localhost_seen and not allow_multiple_localhost_targets:
+                    continue
+                localhost_seen = True
 
             ssh_targets.append({
-                "id": target_id.strip(),
-                "name": target_name.strip()
+                "id": validated_target["id"],
+                "name": validated_target["name"]
             })
 
     raw_links = raw.get("service_links") if isinstance(raw, dict) else None

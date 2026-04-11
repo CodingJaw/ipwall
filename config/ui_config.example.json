@@ -6,10 +6,14 @@
       "id": "Required. Stable machine-readable target key.",
       "name": "Required. Human-readable target label shown in UI.",
       "enabled": "Optional boolean (default: true). Disabled targets are ignored.",
-      "remote_host": "Required for remote sync. DNS name or IP.",
-      "remote_user": "Required for remote sync. SSH username.",
+      "localhost": "Optional boolean. Set to true for a local target reconciled without SSH.",
+      "remote_host": "Required for remote targets. DNS name or IP.",
+      "remote_user": "Required for remote targets. SSH username.",
       "remote_port": "Optional integer (default: 22).",
-      "remote_script": "Optional path to remote sync script (default: /usr/local/bin/ipwall-remote-sync)."
+      "remote_script": "Optional path to remote sync script (default: /usr/local/bin/ipwall-remote-sync). Must not be set for localhost targets."
+    },
+    "top_level_fields": {
+      "allow_multiple_localhost_targets": "Optional boolean (default: false). Keep false unless you intentionally run multiple localhost chains."
     },
     "service_links_fields": {
       "id": "Required. Stable machine-readable group key.",
@@ -27,6 +31,12 @@
     }
   },
   "ssh_targets": [
+    {
+      "id": "localhost",
+      "name": "Local Firewall",
+      "enabled": true,
+      "localhost": true
+    },
     {
       "id": "main-bastion",
       "name": "Main Bastion",
