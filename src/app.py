@@ -13,7 +13,7 @@ from flask import (
     abort, session
 )
 
-from remote_sync import sync_targets
+from remote_sync import sync_all_target_states
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -447,6 +447,18 @@ def update_whitelist_if_changed(user_data):
         save_yaml(IP_WHITELIST_FILE, whitelist)
 
 
+def reconcile_remote_targets(user_data, requester_email):
+    try:
+        result = sync_all_target_states(
+            user_data=user_data,
+            requester_email=requester_email,
+        )
+        return result
+    except Exception as exc:
+        app.logger.warning("Remote target reconciliation failed: %s", exc)
+        return None
+
+
 # --------------------------------------------------
 # Routes
 # --------------------------------------------------
@@ -460,6 +472,7 @@ def index():
 
     if cleanup_expired_ips(data):
         save_yaml(USER_DATA_FILE, data)
+        reconcile_remote_targets(data, "system:periodic-reconcile")
 
     update_whitelist_if_changed(data)
 
@@ -590,15 +603,7 @@ def add_ip():
         (e for e in user["ips"] if e.get("ip") == identity["ip"]),
         None
     )
-    previous_target_ids = set()
-
     if existing:
-        previous_target_ids = {
-            t.get("target_id")
-            for t in existing.get("ssh_targets", [])
-            if isinstance(t, dict) and t.get("target_id")
-        }
-
         existing["last_seen"] = now
 
         if is_admin(identity["groups"]):
@@ -657,42 +662,14 @@ def add_ip():
     update_whitelist_if_changed(data)
 
     if is_admin(identity["groups"]):
-        selected_target_ids = set(ssh_target_ids)
-
-        if selected_target_ids:
-            try:
-                grant_result = sync_targets(
-                    action="grant",
-                    requester_email=identity["email"],
-                    ip=identity["ip"],
-                    target_ids=sorted(selected_target_ids),
-                )
-                if grant_result["failed"] > 0:
-                    flash(
-                        f"SSH grant partially applied "
-                        f"({grant_result['succeeded']} success, {grant_result['failed']} failed)",
-                        "warning"
-                    )
-            except Exception:
-                flash("SSH grant saved locally but remote sync failed", "warning")
-
-        removed_target_ids = previous_target_ids - selected_target_ids
-        if removed_target_ids:
-            try:
-                revoke_result = sync_targets(
-                    action="revoke",
-                    requester_email=identity["email"],
-                    ip=identity["ip"],
-                    target_ids=sorted(removed_target_ids),
-                )
-                if revoke_result["failed"] > 0:
-                    flash(
-                        f"SSH revoke partially applied "
-                        f"({revoke_result['succeeded']} success, {revoke_result['failed']} failed)",
-                        "warning"
-                    )
-            except Exception:
-                flash("SSH revoke saved locally but remote sync failed", "warning")
+        sync_result = reconcile_remote_targets(data, identity["email"])
+        if sync_result is None or sync_result["failed"] > 0:
+            succeeded = sync_result["succeeded"] if sync_result else 0
+            failed = sync_result["failed"] if sync_result else "all"
+            flash(
+                f"Remote target sync partially applied ({succeeded} success, {failed} failed)",
+                "warning"
+            )
 
     return redirect(url_for("index"))
 
@@ -725,6 +702,11 @@ def remove_ip():
     save_yaml(USER_DATA_FILE, data)
 
     update_whitelist_if_changed(data)
+
+    if is_admin(identity["groups"]):
+        sync_result = reconcile_remote_targets(data, identity["email"])
+        if sync_result is None or sync_result["failed"] > 0:
+            flash("IP removed locally but remote sync failed for one or more targets", "warning")
 
     flash("IP removed", "warning")
 
@@ -767,16 +749,8 @@ def revoke_ssh():
 
     save_yaml(USER_DATA_FILE, data)
 
-    try:
-        result = sync_targets(
-            action="revoke",
-            requester_email=identity["email"],
-            ip=ip,
-            target_ids=[target_id],
-        )
-        if result["failed"] > 0:
-            flash("SSH revoke updated locally but failed on one or more remote targets", "warning")
-    except Exception:
+    result = reconcile_remote_targets(data, identity["email"])
+    if result is None or result["failed"] > 0:
         flash("SSH revoke updated locally but remote sync failed", "warning")
 
     flash("SSH access revoked", "warning")
@@ -812,6 +786,10 @@ def clear_all_users():
         .setdefault("ipWhiteList", {})["sourceRange"] = []
 
     save_yaml(IP_WHITELIST_FILE, whitelist)
+
+    result = reconcile_remote_targets({}, identity["email"])
+    if result is None or result["failed"] > 0:
+        flash("Users cleared locally but remote sync failed for one or more targets", "warning")
 
     flash("All user data cleared", "danger")
 
