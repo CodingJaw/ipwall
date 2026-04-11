@@ -158,14 +158,68 @@ def compute_desired_target_state(user_data):
     }
 
 
+def _normalize_ip_list(values):
+    normalized = []
+    for value in values:
+        normalized.append(str(ipaddress.ip_address(value)))
+    return sorted(set(normalized))
+
+
+def _validate_remote_response(stdout, expected_ips):
+    if not isinstance(stdout, str) or not stdout.strip():
+        return None, "remote stdout was empty"
+
+    try:
+        parsed = json.loads(stdout)
+    except Exception as exc:
+        return None, f"remote stdout was not valid JSON: {exc}"
+
+    if not isinstance(parsed, dict):
+        return None, "remote JSON response must be an object"
+
+    required_types = {
+        "ok": bool,
+        "applied_ips": list,
+        "missing": list,
+        "extra": list,
+        "errors": list,
+    }
+    for key, expected_type in required_types.items():
+        if key not in parsed:
+            return None, f"remote JSON response missing key '{key}'"
+        if not isinstance(parsed[key], expected_type):
+            return None, f"remote JSON response key '{key}' must be {expected_type.__name__}"
+
+    try:
+        applied_ips = _normalize_ip_list(parsed.get("applied_ips", []))
+    except Exception as exc:
+        return None, f"remote applied_ips contained invalid IPs: {exc}"
+
+    if applied_ips != expected_ips:
+        return parsed, (
+            "remote applied_ips mismatch "
+            f"expected={expected_ips} got={applied_ips}"
+        )
+
+    return parsed, None
+
+
 def _run_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
     expected_count = len(ips)
+    request_id = str(uuid.uuid4())
     base = {
         "timestamp": _utc_now_iso(),
         "correlation_id": correlation_id,
         "target_id": target_id,
         "expected_count": expected_count,
         "requester_email": requester_email,
+    }
+
+    payload = {
+        "chain": REMOTE_SYNC_CHAIN,
+        "ips": ips,
+        "request_id": request_id,
+        "target_id": target_id,
     }
 
     cmd = [
@@ -180,33 +234,45 @@ def _run_target_state(requester_email, target_id, ips, target, timeout_seconds, 
         str(target["port"]),
         f"{target['user']}@{target['host']}",
         target["script"],
-        "--chain",
-        REMOTE_SYNC_CHAIN,
-        "--ips-json",
-        json.dumps(ips),
     ]
 
     try:
         completed = subprocess.run(
             cmd,
+            input=json.dumps(payload),
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             check=False,
         )
 
-        if completed.returncode == 0:
+        stderr = (completed.stderr or "").strip()
+        response, response_error = _validate_remote_response(completed.stdout, ips)
+        remote_ok = bool(response and response.get("ok"))
+
+        if completed.returncode == 0 and remote_ok and response_error is None:
             result = {
                 **base,
                 "status": "success",
-                "message": "remote update applied",
+                "message": "remote update applied and verified",
             }
         else:
-            stderr = (completed.stderr or "").strip()[:300]
+            error_parts = []
+            if completed.returncode != 0:
+                error_parts.append(f"remote command exited {completed.returncode}")
+            if response_error:
+                error_parts.append(response_error)
+            if response and not remote_ok:
+                errors = response.get("errors", [])
+                if errors:
+                    error_parts.append(f"remote errors={errors}")
+            if stderr:
+                error_parts.append(f"stderr={stderr[:300]}")
+
             result = {
                 **base,
                 "status": "failure",
-                "message": stderr or f"remote command exited {completed.returncode}",
+                "message": "; ".join(error_parts)[:700] or "remote command failed",
             }
 
     except subprocess.TimeoutExpired:
@@ -234,10 +300,7 @@ def sync_target_state(target_id, ips, requester_email, timeout_seconds=REMOTE_SY
     if not isinstance(target_id, str) or not target_id.strip():
         raise ValueError("target_id is required")
 
-    normalized_ips = []
-    for ip in ips:
-        normalized_ips.append(str(ipaddress.ip_address(ip)))
-    normalized_ips = sorted(set(normalized_ips))
+    normalized_ips = _normalize_ip_list(ips)
 
     correlation_id = correlation_id or str(uuid.uuid4())
 
