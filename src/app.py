@@ -654,23 +654,19 @@ def add_ip():
         if is_admin(identity["groups"]):
 
             if ssh_target_ids:
-
-                by_target_id = {
-                    t.get("target_id"): t
-                    for t in existing.get("ssh_targets", [])
-                    if isinstance(t, dict) and t.get("target_id")
-                }
-
                 existing["ssh_targets"] = []
 
                 for target_id in ssh_target_ids:
-                    existing_target = by_target_id.get(target_id, {})
+                    # Rule: selecting targets in the admin form grants SSH immediately.
+                    # We persist enabledssh=true with a fresh ssh_enabled_time so
+                    # compute_desired_target_state() and timer reconciliation both
+                    # include the target right away.
                     existing["ssh_targets"].append({
                         "target_id": target_id,
                         "target_name": configured_ssh_targets[target_id],
                         "ssh_hours": ssh_hours,
-                        "enabledssh": bool(existing_target.get("enabledssh", False)),
-                        "ssh_enabled_time": existing_target.get("ssh_enabled_time")
+                        "enabledssh": True,
+                        "ssh_enabled_time": now
                     })
 
             else:
@@ -693,7 +689,9 @@ def add_ip():
                     "target_id": target_id,
                     "target_name": configured_ssh_targets[target_id],
                     "ssh_hours": ssh_hours,
-                    "enabledssh": False
+                    # Same immediate-grant rule for first creation.
+                    "enabledssh": True,
+                    "ssh_enabled_time": now
                 }
                 for target_id in ssh_target_ids
             ]

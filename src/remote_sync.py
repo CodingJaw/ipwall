@@ -134,6 +134,8 @@ def _target_state_active(target, now):
     if not isinstance(target, dict):
         return False
 
+    # Canonical rule: only explicitly enabled targets are desired.
+    # The GUI sets enabledssh=true at grant time for selected targets.
     if not bool(target.get("enabledssh")):
         return False
 
@@ -179,6 +181,11 @@ def compute_desired_target_state(user_data):
                 continue
 
             for ssh_target in ssh_targets:
+                # First-grant behavior:
+                # GUI writes selected targets with enabledssh=true and a fresh
+                # ssh_enabled_time immediately. That means the first admin grant
+                # is desired right away and timer reconciliation will include it
+                # on the next sync without waiting for any separate toggle step.
                 if not _target_state_active(ssh_target, now):
                     continue
 
