@@ -248,19 +248,43 @@ The Flask app can push SSH grant/revoke updates from the main server to selected
 
 ### Target mapping in config
 
-Each `ssh_targets` entry in `config/ui_config.json` can include remote connection details:
+Each `ssh_targets` entry in `config/ui_config.json` must be exactly one of these target types:
 
-- `remote_host` — DNS name or IP of the remote host.
-- `remote_user` — SSH user used by the main server.
-- `remote_port` — SSH port (default `22`).
-- `remote_script` — restricted remote script path (default `/usr/local/bin/ipwall-remote-sync`).
+- **Remote target**: requires `remote_host` + `remote_user`; optional `remote_port` (default `22`) and `remote_script`.
+- **Localhost target**: requires `"localhost": true` and must not define any `remote_*` fields. This target is reconciled locally (no SSH).
 
-Only targets with valid `id` + remote connection fields are used for remote sync.
+Ambiguous targets are rejected (ignored) during config parsing.
+
+By default, only one localhost target is allowed. If you intentionally run a multi-chain localhost design, set top-level `allow_multiple_localhost_targets` to `true`.
+
+Example:
+
+```json
+{
+  "allow_multiple_localhost_targets": false,
+  "ssh_targets": [
+    {
+      "id": "localhost",
+      "name": "Local Firewall",
+      "localhost": true
+    },
+    {
+      "id": "main-bastion",
+      "name": "Main Bastion",
+      "remote_host": "main-bastion.example.com",
+      "remote_user": "ipwall",
+      "remote_port": 22,
+      "remote_script": "/usr/local/bin/ipwall-remote-sync"
+    }
+  ]
+}
+```
 
 ### Runtime behavior
 
 - On SSH grant (`/add_ip` with selected SSH targets), IPWall runs `ssh` per target and invokes the remote script with `--action grant`.
 - On SSH revoke (`/revoke_ssh` or target removal from an existing IP), IPWall invokes the remote script with `--action revoke`.
+- For localhost targets, IPWall applies desired state by running the reconciler script locally (no SSH transport).
 - Calls are per-target with timeout (default `10s`, env `REMOTE_SYNC_TIMEOUT_SECONDS`).
 - Failures are isolated: one failed target does not block other targets or local YAML persistence.
 - Results are logged to `remote_sync_results.log` (env `REMOTE_SYNC_LOG_FILE`) including timestamp, requester email, IP, action, target, and status.
