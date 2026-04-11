@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 
 import ipaddress
+import fcntl
 import json
+import os
 import subprocess
 import sys
+import tempfile
 
 SSH_PORT = "22"
+LOCK_DIR = "/var/lock"
 
 
 def eprint(message):
@@ -18,6 +22,12 @@ def run_cmd(cmd):
         return completed.returncode == 0, (completed.stderr or "").strip()
     except Exception as exc:
         return False, str(exc)
+
+
+def run_cmd_or_raise(cmd):
+    ok, stderr = run_cmd(cmd)
+    if not ok:
+        raise RuntimeError(f"command failed: {' '.join(cmd)}: {stderr}")
 
 
 def parse_request(stdin_text):
@@ -69,15 +79,16 @@ def parse_request(stdin_text):
     }, errors
 
 
-def ensure_chain(chain, errors):
+def chain_exists(chain):
     exists, _ = run_cmd(["iptables", "-L", chain])
-    if not exists:
-        created, stderr = run_cmd(["iptables", "-N", chain])
-        if not created:
-            errors.append(f"failed to create chain {chain}: {stderr}")
-            return False
+    return exists
 
-    has_jump, _ = run_cmd([
+
+def ensure_alias_chain(alias_chain):
+    if not chain_exists(alias_chain):
+        run_cmd_or_raise(["iptables", "-N", alias_chain])
+
+    has_input_jump, _ = run_cmd([
         "iptables",
         "-C",
         "INPUT",
@@ -86,10 +97,10 @@ def ensure_chain(chain, errors):
         "--dport",
         SSH_PORT,
         "-j",
-        chain,
+        alias_chain,
     ])
-    if not has_jump:
-        inserted, stderr = run_cmd([
+    if not has_input_jump:
+        run_cmd_or_raise([
             "iptables",
             "-I",
             "INPUT",
@@ -98,26 +109,21 @@ def ensure_chain(chain, errors):
             "--dport",
             SSH_PORT,
             "-j",
-            chain,
+            alias_chain,
         ])
-        if not inserted:
-            errors.append(f"failed to insert INPUT jump to {chain}: {stderr}")
-            return False
-
-    return True
 
 
-def rebuild_chain(chain, desired_ips, errors):
-    flushed, stderr = run_cmd(["iptables", "-F", chain])
-    if not flushed:
-        errors.append(f"failed to flush chain {chain}: {stderr}")
-        return
+def create_next_chain(next_chain, desired_ips):
+    if chain_exists(next_chain):
+        run_cmd_or_raise(["iptables", "-F", next_chain])
+    else:
+        run_cmd_or_raise(["iptables", "-N", next_chain])
 
     for ip in desired_ips:
-        added, rule_stderr = run_cmd([
+        run_cmd_or_raise([
             "iptables",
             "-A",
-            chain,
+            next_chain,
             "-p",
             "tcp",
             "-s",
@@ -131,12 +137,118 @@ def rebuild_chain(chain, desired_ips, errors):
             "-j",
             "ACCEPT",
         ])
-        if not added:
-            errors.append(f"failed to add ACCEPT rule for {ip}: {rule_stderr}")
 
-    appended, return_stderr = run_cmd(["iptables", "-A", chain, "-j", "RETURN"])
-    if not appended:
-        errors.append(f"failed to append RETURN to {chain}: {return_stderr}")
+    run_cmd_or_raise(["iptables", "-A", next_chain, "-j", "RETURN"])
+
+
+def point_alias_to_chain(alias_chain, target_chain):
+    if not chain_exists(alias_chain):
+        run_cmd_or_raise(["iptables", "-N", alias_chain])
+
+    run_cmd_or_raise(["iptables", "-F", alias_chain])
+    run_cmd_or_raise(["iptables", "-A", alias_chain, "-j", target_chain])
+
+
+def cleanup_chain_if_unused(chain):
+    if not chain_exists(chain):
+        return
+
+    in_use, _ = run_cmd(["iptables", "-C", "INPUT", "-j", chain])
+    if in_use:
+        return
+
+    run_cmd_or_raise(["iptables", "-F", chain])
+    run_cmd_or_raise(["iptables", "-X", chain])
+
+
+def snapshot_rules():
+    completed = subprocess.run(["iptables-save"], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"failed to snapshot rules: {(completed.stderr or '').strip()}")
+    return completed.stdout
+
+
+def restore_rules(snapshot):
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as temp_file:
+        temp_file.write(snapshot)
+        temp_path = temp_file.name
+    try:
+        run_cmd_or_raise(["iptables-restore", temp_path])
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+def acquire_lock(lock_name):
+    os.makedirs(LOCK_DIR, exist_ok=True)
+    lock_path = os.path.join(LOCK_DIR, f"{lock_name}.lock")
+    lock_file = open(lock_path, "w", encoding="utf-8")
+    fcntl.flock(lock_file, fcntl.LOCK_EX)
+    return lock_file
+
+
+def apply_desired_state(chain, desired_ips):
+    alias_chain = chain
+    next_chain = f"{chain}_NEXT"
+    current_chain = f"{chain}_CURRENT"
+
+    lock_file = acquire_lock(f"ipwall-sync-{chain}")
+    snapshot = snapshot_rules()
+    old_target_chain = None
+
+    try:
+        ensure_alias_chain(alias_chain)
+
+        alias_rules = subprocess.run(
+            ["iptables", "-S", alias_chain], capture_output=True, text=True, check=False
+        )
+        if alias_rules.returncode == 0:
+            for line in (alias_rules.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and parts[0] == "-A" and parts[1] == alias_chain and "-j" in parts:
+                    try:
+                        old_target_chain = parts[parts.index("-j") + 1]
+                        break
+                    except Exception:
+                        pass
+
+        create_next_chain(next_chain, desired_ips)
+        if chain_exists(current_chain):
+            cleanup_chain_if_unused(current_chain)
+        run_cmd_or_raise(["iptables", "-E", next_chain, current_chain])
+        point_alias_to_chain(alias_chain, current_chain)
+
+        if old_target_chain and old_target_chain not in (alias_chain, current_chain):
+            cleanup_chain_if_unused(old_target_chain)
+
+    except Exception:
+        restore_rules(snapshot)
+        raise
+    finally:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def get_chain_jump_target(chain):
+    completed = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        return None
+
+    for line in (completed.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4 or parts[0] != "-A" or parts[1] != chain:
+            continue
+        if "-j" not in parts:
+            continue
+        try:
+            return parts[parts.index("-j") + 1]
+        except Exception:
+            continue
+    return None
 
 
 def get_chain_applied_ips(chain, errors):
@@ -151,6 +263,7 @@ def get_chain_applied_ips(chain, errors):
         return []
 
     applied = set()
+    has_accept_rule = False
     for line in (completed.stdout or "").splitlines():
         parts = line.split()
         if len(parts) < 3 or parts[0] != "-A" or parts[1] != chain:
@@ -163,6 +276,7 @@ def get_chain_applied_ips(chain, errors):
             continue
         if jump_target != "ACCEPT":
             continue
+        has_accept_rule = True
         if "-s" not in parts:
             continue
         try:
@@ -170,6 +284,13 @@ def get_chain_applied_ips(chain, errors):
             applied.add(str(ipaddress.ip_network(source, strict=False).network_address))
         except Exception:
             errors.append(f"unable to parse source from rule: {line}")
+
+    if has_accept_rule:
+        return sorted(applied)
+
+    target = get_chain_jump_target(chain)
+    if target and target not in (chain, "RETURN", "ACCEPT", "DROP", "REJECT"):
+        return get_chain_applied_ips(target, errors)
 
     return sorted(applied)
 
@@ -204,8 +325,10 @@ def main():
         emit_response(False, [], desired_ips, [], errors)
         return 1
 
-    if ensure_chain(chain, errors):
-        rebuild_chain(chain, desired_ips, errors)
+    try:
+        apply_desired_state(chain, desired_ips)
+    except Exception as exc:
+        errors.append(str(exc))
 
     applied_ips = get_chain_applied_ips(chain, errors)
     missing = sorted(set(desired_ips) - set(applied_ips))
