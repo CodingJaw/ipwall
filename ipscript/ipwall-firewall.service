@@ -3,4 +3,4 @@ Description=IPWall SSH Firewall Sync
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/ipwall/firewall_sync.py
+ExecStart=/usr/bin/python3 /opt/ipwall/remote_sync.py
