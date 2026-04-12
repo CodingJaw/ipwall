@@ -22,7 +22,10 @@ UI_CONFIG_FILE = os.environ.get(
 USER_DATA_FILE = os.environ.get("USER_DATA_FILE", "user_data.yml")
 REMOTE_SYNC_LOG_FILE = os.environ.get("REMOTE_SYNC_LOG_FILE", "remote_sync_results.log")
 REMOTE_SYNC_TIMEOUT_SECONDS = int(os.environ.get("REMOTE_SYNC_TIMEOUT_SECONDS", "10"))
-FIREWALL_SYNC_SCRIPT = os.environ.get("FIREWALL_SYNC_SCRIPT", "/usr/local/bin/ipwall-firewall-sync")
+REMOTE_SYNC_SCRIPT = os.environ.get(
+    "REMOTE_SYNC_SCRIPT",
+    os.environ.get("FIREWALL_SYNC_SCRIPT", "/usr/local/bin/ipwall-remote-sync"),
+)
 REMOTE_SYNC_CHAIN = os.environ.get("REMOTE_SYNC_CHAIN", "IPWALL_SSH")
 REQUESTER_EMAIL = os.environ.get("SYNC_REQUESTER_EMAIL", "system@ipwall.local")
 
@@ -71,7 +74,7 @@ def parse_sync_target(target):
         return {
             "id": target_id.strip(),
             "type": "local",
-            "script": FIREWALL_SYNC_SCRIPT,
+            "script": REMOTE_SYNC_SCRIPT,
         }
 
     if "localhost" in target:
@@ -96,7 +99,7 @@ def parse_sync_target(target):
         "host": host.strip(),
         "user": user.strip(),
         "port": port,
-        "script": str(target.get("remote_script", FIREWALL_SYNC_SCRIPT)).strip() or FIREWALL_SYNC_SCRIPT,
+        "script": str(target.get("remote_script", REMOTE_SYNC_SCRIPT)).strip() or REMOTE_SYNC_SCRIPT,
     }
 
 

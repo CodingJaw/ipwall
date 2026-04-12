@@ -10,7 +10,7 @@
       "remote_host": "Required for remote targets. DNS name or IP.",
       "remote_user": "Required for remote targets. SSH username.",
       "remote_port": "Optional integer (default: 22).",
-      "remote_script": "Optional path to remote sync script (default: /usr/local/bin/ipwall-firewall-sync). Must not be set for localhost targets."
+      "remote_script": "Optional path to remote sync script (default: /usr/local/bin/ipwall-remote-sync). Must not be set for localhost targets."
     },
     "top_level_fields": {
       "allow_multiple_localhost_targets": "Optional boolean (default: false). Keep false unless you intentionally run multiple localhost chains."
@@ -44,7 +44,7 @@
       "remote_host": "main-bastion.example.com",
       "remote_user": "ipwall",
       "remote_port": 22,
-      "remote_script": "/usr/local/bin/ipwall-firewall-sync"
+      "remote_script": "/usr/local/bin/ipwall-remote-sync"
     }
   ],
   "service_links": [

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 DEFAULT_INSTALL_DIR = "/opt/ipwall"
-DEFAULT_SCRIPT_NAME = "remote_sync.py"
+DEFAULT_SCRIPT_NAME = "firewall_sync.py"
 DEFAULT_TIMER = 60
 DEFAULT_USERDATA = "/docker/ipwall/user_data.yml"
 
@@ -70,7 +70,7 @@ Install using cron instead of systemd
 -------------------------------------
 sudo python3 firewall_install.py --install --method cron
 
-Upgrade remote_sync.py
+Upgrade firewall_sync.py
 ------------------------
 sudo python3 firewall_install.py --upgrade
 
@@ -331,7 +331,7 @@ def doctor():
     checks.append(("iptables installed", command_exists("iptables")))
 
     script = os.path.join(DEFAULT_INSTALL_DIR, DEFAULT_SCRIPT_NAME)
-    checks.append(("remote_sync installed", os.path.exists(script)))
+    checks.append(("firewall_sync installed", os.path.exists(script)))
 
     checks.append(("user_data readable", os.path.exists(DEFAULT_USERDATA)))
 
@@ -396,7 +396,7 @@ def main():
     parser.add_argument("--installdir", default=DEFAULT_INSTALL_DIR)
     parser.add_argument("--userdata", default=None)
 
-    parser.add_argument("--source", default="./remote_sync.py")
+    parser.add_argument("--source", default="./firewall_sync.py")
 
     parser.add_argument("--dry-run", action="store_true")
 
