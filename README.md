@@ -17,8 +17,9 @@ Users can add/refresh their current IP, and admins can request temporary SSH acc
 - `src/app.py` — Flask web app and YAML syncing logic.
 - `src/templates/` — UI templates.
 - `src/static/` — Bootstrap assets and icons.
-- `ipscript/firewall_sync.py` — deterministic SSH firewall rule reconciler.
-- `ipscript/firewall_install.py` — installer/manager for the sync script (systemd or cron).
+- `ipscript/firewall_sync.py` — deterministic SSH firewall rule reconciler (invoked on target hosts).
+- `ipscript/host_reconcile.py` — host-side full-state reconciler for all SSH targets.
+- `ipscript/firewall_install.py` — installer/manager for the host reconcile timer (systemd or cron).
 - `ipscript/ipwall-firewall.service` — sample systemd service unit.
 
 ## Requirements
@@ -242,9 +243,26 @@ http:
 - Marks first activation (`enabledssh`, `ssh_enabled_time`) and logs to `/var/log/ipwall_ssh_audit.log`.
 - Auto-revokes expired SSH grants (`ssh_hours`, default 4h).
 
+## Host reconcile timer (single scheduler on main host)
+
+`ipscript/host_reconcile.py` is the only scheduled job needed on the main host. Each run:
+
+- loads `user_data.yml`
+- prunes expired `ssh_targets` entries from user records
+- computes desired IP state per configured target
+- runs full-state sync for each target (localhost or SSH remote)
+- persists `user_data.yml` only when expiration pruning changed it
+
+Install and schedule it with:
+
+```bash
+cd ipscript
+sudo python3 firewall_install.py --install
+```
+
 ## Remote SSH sync (push from main server)
 
-The Flask app can push SSH grant/revoke updates from the main server to selected remote hosts. Remote hosts still apply firewall rules locally.
+The host reconcile job pushes full SSH grant/revoke state from the main server to selected remote hosts. Remote hosts still apply firewall rules locally.
 
 ### Target mapping in config
 

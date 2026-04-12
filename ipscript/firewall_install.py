@@ -7,14 +7,14 @@ import subprocess
 import sys
 
 DEFAULT_INSTALL_DIR = "/opt/ipwall"
-DEFAULT_SCRIPT_NAME = "firewall_sync.py"
+DEFAULT_SCRIPT_NAME = "host_reconcile.py"
+DEFAULT_REMOTE_SYNC_NAME = "remote_sync.py"
 DEFAULT_TIMER = 60
 DEFAULT_USERDATA = "/docker/ipwall/user_data.yml"
 
-SYSTEMD_SERVICE = "ipwall-firewall-sync.service"
-SYSTEMD_TIMER = "ipwall-firewall-sync.timer"
+SYSTEMD_SERVICE = "ipwall-host-reconcile.service"
+SYSTEMD_TIMER = "ipwall-host-reconcile.timer"
 
-AUDIT_LOG = "/var/log/ipwall_ssh_audit.log"
 FIREWALL_CHAIN = "IPWALL_SSH"
 
 
@@ -46,7 +46,7 @@ def command_exists(cmd):
 def show_examples():
 
     print("""
-IPWall Firewall Installer Examples
+IPWall Host Reconcile Installer Examples
 ==================================
 
 Install using systemd (recommended)
@@ -70,7 +70,7 @@ Install using cron instead of systemd
 -------------------------------------
 sudo python3 firewall_install.py --install --method cron
 
-Upgrade firewall_sync.py
+Upgrade host_reconcile.py
 ------------------------
 sudo python3 firewall_install.py --upgrade
 
@@ -118,18 +118,23 @@ def update_userdata(script_path, userdata):
         f.write("\n".join(new_lines) + "\n")
 
 
-def install_script(source, installdir, userdata, dry):
+def install_script(source, remote_sync_source, installdir, userdata, dry):
 
     os.makedirs(installdir, exist_ok=True)
 
     dest = os.path.join(installdir, DEFAULT_SCRIPT_NAME)
 
+    remote_sync_dest = os.path.join(installdir, DEFAULT_REMOTE_SYNC_NAME)
+
     if dry:
         print(f"[dry-run] install script {source} -> {dest}")
+        print(f"[dry-run] install dependency {remote_sync_source} -> {remote_sync_dest}")
         return dest
 
     shutil.copy2(source, dest)
+    shutil.copy2(remote_sync_source, remote_sync_dest)
     os.chmod(dest, 0o755)
+    os.chmod(remote_sync_dest, 0o644)
 
     if userdata:
         update_userdata(dest, userdata)
@@ -139,7 +144,7 @@ def install_script(source, installdir, userdata, dry):
     return dest
 
 
-def upgrade_script(source, installdir, userdata, dry):
+def upgrade_script(source, remote_sync_source, installdir, userdata, dry):
 
     dest = os.path.join(installdir, DEFAULT_SCRIPT_NAME)
 
@@ -149,9 +154,11 @@ def upgrade_script(source, installdir, userdata, dry):
 
     if dry:
         print(f"[dry-run] upgrade {dest}")
+        print(f"[dry-run] upgrade {os.path.join(installdir, DEFAULT_REMOTE_SYNC_NAME)}")
         return
 
     shutil.copy2(source, dest)
+    shutil.copy2(remote_sync_source, os.path.join(installdir, DEFAULT_REMOTE_SYNC_NAME))
 
     if userdata:
         update_userdata(dest, userdata)
@@ -163,23 +170,25 @@ def upgrade_script(source, installdir, userdata, dry):
 # Systemd install
 # --------------------------------------------------
 
-def install_systemd(script_path, timer, dry):
+def install_systemd(script_path, timer, userdata, dry):
 
     service_file = f"/etc/systemd/system/{SYSTEMD_SERVICE}"
     timer_file = f"/etc/systemd/system/{SYSTEMD_TIMER}"
 
+    userdata_arg = f" --user-data {userdata}" if userdata else ""
+
     service = f"""
 [Unit]
-Description=IPWall Firewall Sync
+Description=IPWall Host Reconcile Sync
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 {script_path}
+ExecStart=/usr/bin/python3 {script_path}{userdata_arg}
 """
 
     timer_conf = f"""
 [Unit]
-Description=Run IPWall firewall sync
+Description=Run IPWall host reconcile sync
 
 [Timer]
 OnBootSec=30
@@ -211,11 +220,12 @@ WantedBy=timers.target
 # Cron install
 # --------------------------------------------------
 
-def install_cron(script_path, timer, dry):
+def install_cron(script_path, timer, userdata, dry):
 
     minutes = max(1, timer // 60)
 
-    cron_line = f"*/{minutes} * * * * /usr/bin/python3 {script_path}"
+    userdata_arg = f" --user-data {userdata}" if userdata else ""
+    cron_line = f"*/{minutes} * * * * /usr/bin/python3 {script_path}{userdata_arg}"
 
     if dry:
         print("[dry-run] cron:", cron_line)
@@ -226,7 +236,10 @@ def install_cron(script_path, timer, dry):
     except subprocess.CalledProcessError:
         existing = ""
 
-    lines = [l for l in existing.splitlines() if DEFAULT_SCRIPT_NAME not in l]
+    lines = [
+        l for l in existing.splitlines()
+        if DEFAULT_SCRIPT_NAME not in l and "firewall_sync.py" not in l
+    ]
     lines.append(cron_line)
 
     p = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
@@ -264,11 +277,13 @@ def remove_all(installdir, dry):
     service = f"/etc/systemd/system/{SYSTEMD_SERVICE}"
     timer = f"/etc/systemd/system/{SYSTEMD_TIMER}"
     script = os.path.join(installdir, DEFAULT_SCRIPT_NAME)
+    remote_sync = os.path.join(installdir, DEFAULT_REMOTE_SYNC_NAME)
 
     if dry:
         print("[dry-run] remove", service)
         print("[dry-run] remove", timer)
         print("[dry-run] remove", script)
+        print("[dry-run] remove", remote_sync)
         return
 
     run(["systemctl", "stop", SYSTEMD_TIMER])
@@ -282,12 +297,17 @@ def remove_all(installdir, dry):
 
     if os.path.exists(script):
         os.remove(script)
+    if os.path.exists(remote_sync):
+        os.remove(remote_sync)
 
     run(["systemctl", "daemon-reload"])
 
     try:
         existing = subprocess.check_output(["crontab", "-l"], text=True)
-        lines = [l for l in existing.splitlines() if DEFAULT_SCRIPT_NAME not in l]
+        lines = [
+            l for l in existing.splitlines()
+            if DEFAULT_SCRIPT_NAME not in l and "firewall_sync.py" not in l
+        ]
 
         p = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
         p.communicate("\n".join(lines) + "\n")
@@ -303,7 +323,7 @@ def remove_all(installdir, dry):
 
 def show_status():
 
-    print("\nIPWall Firewall Sync Status\n")
+    print("\nIPWall Host Reconcile Status\n")
 
     subprocess.run(["systemctl", "status", SYSTEMD_TIMER])
     subprocess.run(["systemctl", "status", SYSTEMD_SERVICE])
@@ -331,7 +351,11 @@ def doctor():
     checks.append(("iptables installed", command_exists("iptables")))
 
     script = os.path.join(DEFAULT_INSTALL_DIR, DEFAULT_SCRIPT_NAME)
-    checks.append(("firewall_sync installed", os.path.exists(script)))
+    checks.append(("host_reconcile installed", os.path.exists(script)))
+    checks.append((
+        "remote_sync dependency installed",
+        os.path.exists(os.path.join(DEFAULT_INSTALL_DIR, DEFAULT_REMOTE_SYNC_NAME))
+    ))
 
     checks.append(("user_data readable", os.path.exists(DEFAULT_USERDATA)))
 
@@ -354,14 +378,6 @@ def doctor():
 
     checks.append(("firewall chain exists", chain))
 
-    try:
-        open(AUDIT_LOG, "a").close()
-        log_ok = True
-    except:
-        log_ok = False
-
-    checks.append(("audit log writable", log_ok))
-
     for name, ok in checks:
 
         status = "OK" if ok else "FAIL"
@@ -377,7 +393,7 @@ def doctor():
 
 def main():
 
-    parser = argparse.ArgumentParser(description="IPWall firewall installer")
+    parser = argparse.ArgumentParser(description="IPWall host reconcile installer")
 
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--remove", action="store_true")
@@ -396,7 +412,8 @@ def main():
     parser.add_argument("--installdir", default=DEFAULT_INSTALL_DIR)
     parser.add_argument("--userdata", default=None)
 
-    parser.add_argument("--source", default="./firewall_sync.py")
+    parser.add_argument("--source", default="./host_reconcile.py")
+    parser.add_argument("--remote-sync-source", default="../src/remote_sync.py")
 
     parser.add_argument("--dry-run", action="store_true")
 
@@ -426,19 +443,31 @@ def main():
 
     if args.install:
 
-        script = install_script(args.source, args.installdir, args.userdata, args.dry_run)
+        script = install_script(
+            args.source,
+            args.remote_sync_source,
+            args.installdir,
+            args.userdata,
+            args.dry_run
+        )
 
         if args.method == "systemd":
-            install_systemd(script, args.timer, args.dry_run)
+            install_systemd(script, args.timer, args.userdata, args.dry_run)
 
         elif args.method == "cron":
-            install_cron(script, args.timer, args.dry_run)
+            install_cron(script, args.timer, args.userdata, args.dry_run)
 
         print("Installation complete.")
         return
 
     if args.upgrade:
-        upgrade_script(args.source, args.installdir, args.userdata, args.dry_run)
+        upgrade_script(
+            args.source,
+            args.remote_sync_source,
+            args.installdir,
+            args.userdata,
+            args.dry_run
+        )
         return
 
     if args.remove:
