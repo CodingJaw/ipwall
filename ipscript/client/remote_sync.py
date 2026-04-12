@@ -1,16 +1,89 @@
 #!/usr/bin/env python3
 
 import fcntl
+import ipaddress
 import json
 import os
 import subprocess
 import sys
 import tempfile
 
-if __package__ in (None, ""):
-    sys.path.append(os.path.dirname(__file__))
+REQUEST_REQUIRED_KEYS = ("chain", "target_id", "request_id", "ips")
+RESPONSE_REQUIRED_KEYS = ("ok", "applied_ips", "missing", "extra", "errors")
 
-from sync_schema import build_remote_response, parse_remote_request
+
+def _validate_exact_keys(payload, required_keys, object_name):
+    if not isinstance(payload, dict):
+        return [f"{object_name} must be a JSON object"]
+
+    errors = []
+    payload_keys = set(payload)
+    required = set(required_keys)
+
+    missing = sorted(required - payload_keys)
+    if missing:
+        errors.append(f"{object_name} missing required keys: {missing}")
+
+    extra = sorted(payload_keys - required)
+    if extra:
+        errors.append(f"{object_name} has unexpected keys: {extra}")
+
+    return errors
+
+
+def parse_remote_request(stdin_text):
+    try:
+        payload = json.loads(stdin_text)
+    except Exception as exc:
+        return None, [f"invalid JSON payload: {exc}"]
+
+    errors = _validate_exact_keys(payload, REQUEST_REQUIRED_KEYS, "request payload")
+    if errors:
+        return None, errors
+
+    chain = payload.get("chain")
+    if not isinstance(chain, str) or not chain.strip():
+        errors.append("chain must be a non-empty string")
+
+    request_id = payload.get("request_id")
+    if not isinstance(request_id, str) or not request_id.strip():
+        errors.append("request_id must be a non-empty string")
+
+    target_id = payload.get("target_id")
+    if not isinstance(target_id, str) or not target_id.strip():
+        errors.append("target_id must be a non-empty string")
+
+    ips = payload.get("ips")
+    if not isinstance(ips, list):
+        errors.append("ips must be a JSON array")
+        ips = []
+
+    normalized_ips = []
+    for raw_ip in ips:
+        if not isinstance(raw_ip, str):
+            errors.append(f"ip must be a string: {raw_ip}")
+            continue
+        try:
+            normalized_ips.append(str(ipaddress.ip_address(raw_ip)))
+        except Exception:
+            errors.append(f"invalid ip: {raw_ip}")
+
+    return {
+        "chain": chain.strip() if isinstance(chain, str) else "",
+        "request_id": request_id.strip() if isinstance(request_id, str) else "",
+        "target_id": target_id.strip() if isinstance(target_id, str) else "",
+        "ips": sorted(set(normalized_ips)),
+    }, errors
+
+
+def build_remote_response(ok, applied_ips, missing, extra, errors):
+    return {
+        "ok": bool(ok),
+        "applied_ips": list(applied_ips),
+        "missing": list(missing),
+        "extra": list(extra),
+        "errors": [str(err) for err in errors],
+    }
 
 SSH_PORT = "22"
 LOCK_DIR = "/var/lock"

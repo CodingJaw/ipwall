@@ -10,10 +10,76 @@ from datetime import datetime, timezone
 
 import yaml
 
-if __package__ in (None, ""):
-    sys.path.append(os.path.dirname(__file__))
+REQUEST_REQUIRED_KEYS = ("chain", "target_id", "request_id", "ips")
+RESPONSE_REQUIRED_KEYS = ("ok", "applied_ips", "missing", "extra", "errors")
 
-from sync_schema import build_remote_request, normalize_ip_list, parse_remote_response
+
+def normalize_ip_list(values):
+    normalized = []
+    for value in values:
+        normalized.append(str(ipaddress.ip_address(value)))
+    return sorted(set(normalized))
+
+
+def _validate_exact_keys(payload, required_keys, object_name):
+    if not isinstance(payload, dict):
+        return [f"{object_name} must be a JSON object"]
+
+    errors = []
+    payload_keys = set(payload)
+    required = set(required_keys)
+
+    missing = sorted(required - payload_keys)
+    if missing:
+        errors.append(f"{object_name} missing required keys: {missing}")
+
+    extra = sorted(payload_keys - required)
+    if extra:
+        errors.append(f"{object_name} has unexpected keys: {extra}")
+
+    return errors
+
+
+def parse_remote_response(stdout):
+    if not isinstance(stdout, str) or not stdout.strip():
+        return None, "remote stdout was empty"
+
+    try:
+        parsed = json.loads(stdout)
+    except Exception as exc:
+        return None, f"remote stdout was not valid JSON: {exc}"
+
+    validation_errors = _validate_exact_keys(parsed, RESPONSE_REQUIRED_KEYS, "response payload")
+    if validation_errors:
+        return None, "; ".join(validation_errors)
+
+    if not isinstance(parsed["ok"], bool):
+        return None, "response payload key 'ok' must be bool"
+
+    for list_key in ("applied_ips", "missing", "extra", "errors"):
+        if not isinstance(parsed[list_key], list):
+            return None, f"response payload key '{list_key}' must be list"
+
+    if not all(isinstance(error, str) for error in parsed["errors"]):
+        return None, "response payload key 'errors' must contain only strings"
+
+    try:
+        parsed["applied_ips"] = normalize_ip_list(parsed.get("applied_ips", []))
+        parsed["missing"] = normalize_ip_list(parsed.get("missing", []))
+        parsed["extra"] = normalize_ip_list(parsed.get("extra", []))
+    except Exception as exc:
+        return None, f"remote JSON response has invalid IP lists: {exc}"
+
+    return parsed, None
+
+
+def build_remote_request(chain, target_id, request_id, ips):
+    return {
+        "chain": str(chain),
+        "target_id": str(target_id),
+        "request_id": str(request_id),
+        "ips": list(ips),
+    }
 
 UI_CONFIG_FILE = os.environ.get(
     "UI_CONFIG_FILE",
