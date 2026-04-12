@@ -7,11 +7,11 @@ import subprocess
 import sys
 
 DEFAULT_HOST_INSTALL_DIR = "/opt/ipwall"
-HOST_SCRIPT_NAME = "remote_sync.py"
-DEFAULT_HOST_SOURCE = "./remote_sync.py"
+HOST_SCRIPT_NAME = "firewall_sync.py"
+DEFAULT_HOST_SOURCE = "./host/firewall_sync.py"
 
 DEFAULT_REMOTE_INSTALL_PATH = "/usr/local/bin/ipwall-firewall-sync"
-DEFAULT_REMOTE_SOURCE = "./firewall_sync.py"
+DEFAULT_REMOTE_SOURCE = "./client/remote_sync.py"
 
 DEFAULT_TIMER = 60
 DEFAULT_USERDATA = "/docker/ipwall/user_data.yml"
@@ -67,26 +67,26 @@ sudo python3 firewall_install.py --install --mode host --timer 120
 Host mode with custom script source/user_data.yml
 --------------------------------------------------
 sudo python3 firewall_install.py --install --mode host \\
-    --host-source /srv/ipwall/remote_sync.py \\
+    --host-source /srv/ipwall/host/firewall_sync.py \\
     --userdata /srv/ipwall/user_data.yml
 
-Remote mode install (script only, no timer)
+Client mode install (script only, no timer)
 --------------------------------------------
-sudo python3 firewall_install.py --install --mode remote
+sudo python3 firewall_install.py --install --mode client
 
-Remote mode install from explicit source/path
+Client mode install from explicit source/path
 ---------------------------------------------
-sudo python3 firewall_install.py --install --mode remote \\
-    --remote-source /srv/ipwall/firewall_sync.py \\
+sudo python3 firewall_install.py --install --mode client \\
+    --remote-source /srv/ipwall/client/remote_sync.py \\
     --remote-path {DEFAULT_REMOTE_INSTALL_PATH}
 
 Upgrade host reconciler script
 ------------------------------
 sudo python3 firewall_install.py --upgrade --mode host
 
-Upgrade remote applier script
+Upgrade client applier script
 -----------------------------
-sudo python3 firewall_install.py --upgrade --mode remote
+sudo python3 firewall_install.py --upgrade --mode client
 
 Enable host systemd timer
 -------------------------
@@ -108,9 +108,9 @@ Remove host installation (timer + script)
 -----------------------------------------
 sudo python3 firewall_install.py --remove --mode host
 
-Remove remote installation (script only)
+Remove client installation (script only)
 ----------------------------------------
-sudo python3 firewall_install.py --remove --mode remote
+sudo python3 firewall_install.py --remove --mode client
 
 SSH target config path must match remote installed path exactly
 ---------------------------------------------------------------
@@ -190,7 +190,7 @@ def upgrade_host_script(source, installdir, userdata, dry):
 
 def upgrade_remote_script(source, remote_path, dry):
     if not os.path.exists(remote_path):
-        print("No installed remote script found. Use --install --mode remote first.")
+        print("No installed remote script found. Use --install --mode client first.")
         return
 
     if dry:
@@ -398,7 +398,7 @@ def main():
     parser.add_argument("--examples", action="store_true")
     parser.add_argument("--doctor", action="store_true")
 
-    parser.add_argument("--mode", choices=["host", "remote"], default="host")
+    parser.add_argument("--mode", choices=["host", "client"], default="host")
     parser.add_argument("--timer", type=int, default=DEFAULT_TIMER)
 
     parser.add_argument("--installdir", default=DEFAULT_HOST_INSTALL_DIR)
@@ -447,7 +447,7 @@ def main():
 
         remote_source = args.source or args.remote_source
         install_remote_script(remote_source, args.remote_path, args.dry_run)
-        print("Remote mode installation complete (no timer installed).")
+        print("Client mode installation complete (no timer installed).")
         return
 
     if args.upgrade:
