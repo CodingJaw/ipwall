@@ -257,8 +257,8 @@ Host-side reconciliation is performed by the timer job running `ipscript/remote_
 
 Each `ssh_targets` entry in `config/ui_config.json` must be exactly one of these target types:
 
-- **Remote target**: requires `remote_host` + `remote_user`; optional `remote_port` (default `22`) and `remote_script`.
-- **Localhost target**: requires `"localhost": true` and must not define any `remote_*` fields. This target is reconciled locally (no SSH).
+- **Remote target**: requires `remote_host` + `remote_user`; optional `remote_port` (default `22`), `remote_script`, `password`, and `passkey_file`.
+- **Localhost target**: requires `"localhost": true` and must not define any remote SSH transport fields (`remote_*`, `password`, `passkey_file`). This target is reconciled locally (no SSH).
 
 Ambiguous targets are rejected (ignored) during config parsing.
 
@@ -280,12 +280,16 @@ Example:
       "name": "Main Bastion",
       "remote_host": "main-bastion.example.com",
       "remote_user": "ipwall",
+      "passkey_file": "/etc/ipwall/keys/main-bastion_id_ed25519",
       "remote_port": 22,
       "remote_script": "/usr/local/bin/ipwall-firewall-sync"
     }
   ]
 }
 ```
+
+When `password` is set, host-side sync invokes `ssh` through `sshpass` and automatically switches to `BatchMode=no`.  
+When `passkey_file` is set, host-side sync adds `-i <passkey_file>` to the SSH command.
 
 ### Runtime behavior
 

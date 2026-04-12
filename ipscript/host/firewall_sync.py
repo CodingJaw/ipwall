@@ -128,7 +128,15 @@ def parse_sync_target(target):
 
     is_localhost = target.get("localhost") is True
     has_remote_fields = any(
-        key in target for key in ("remote_host", "remote_user", "remote_port", "remote_script")
+        key in target
+        for key in (
+            "remote_host",
+            "remote_user",
+            "remote_port",
+            "remote_script",
+            "password",
+            "passkey_file",
+        )
     )
 
     if is_localhost:
@@ -156,6 +164,18 @@ def parse_sync_target(target):
     if port < 1 or port > 65535:
         return None
 
+    password = target.get("password")
+    if password is not None:
+        if not isinstance(password, str) or not password.strip():
+            return None
+        password = password.strip()
+
+    passkey_file = target.get("passkey_file")
+    if passkey_file is not None:
+        if not isinstance(passkey_file, str) or not passkey_file.strip():
+            return None
+        passkey_file = passkey_file.strip()
+
     return {
         "id": target_id.strip(),
         "type": "remote",
@@ -163,6 +183,8 @@ def parse_sync_target(target):
         "user": user.strip(),
         "port": port,
         "script": str(target.get("remote_script", FIREWALL_SYNC_SCRIPT)).strip() or FIREWALL_SYNC_SCRIPT,
+        "password": password,
+        "passkey_file": passkey_file,
     }
 
 
@@ -275,6 +297,36 @@ def write_result_log(result):
         pass
 
 
+def build_target_command(target, timeout_seconds):
+    if target.get("type") == "local":
+        return [target["script"]]
+
+    cmd = ["ssh"]
+    if target.get("password"):
+        cmd = ["sshpass", "-p", target["password"], *cmd]
+
+    batch_mode_value = "no" if target.get("password") else "yes"
+    cmd.extend([
+        "-o",
+        f"BatchMode={batch_mode_value}",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"ConnectTimeout={timeout_seconds}",
+    ])
+
+    if target.get("passkey_file"):
+        cmd.extend(["-i", target["passkey_file"]])
+
+    cmd.extend([
+        "-p",
+        str(target["port"]),
+        f"{target['user']}@{target['host']}",
+        target["script"],
+    ])
+    return cmd
+
+
 def run_target_state(requester_email, target_id, ips, target, timeout_seconds, correlation_id):
     expected_count = len(ips)
     request_id = str(uuid.uuid4())
@@ -293,22 +345,7 @@ def run_target_state(requester_email, target_id, ips, target, timeout_seconds, c
         ips=ips,
     )
 
-    if target.get("type") == "local":
-        cmd = [target["script"]]
-    else:
-        cmd = [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            f"ConnectTimeout={timeout_seconds}",
-            "-p",
-            str(target["port"]),
-            f"{target['user']}@{target['host']}",
-            target["script"],
-        ]
+    cmd = build_target_command(target=target, timeout_seconds=timeout_seconds)
 
     try:
         completed = subprocess.run(

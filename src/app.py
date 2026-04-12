@@ -257,7 +257,15 @@ def validate_ssh_target(entry):
 
     is_localhost = entry.get("localhost") is True
     has_remote_fields = any(
-        key in entry for key in ("remote_host", "remote_user", "remote_port", "remote_script")
+        key in entry
+        for key in (
+            "remote_host",
+            "remote_user",
+            "remote_port",
+            "remote_script",
+            "password",
+            "passkey_file",
+        )
     )
 
     if is_localhost and has_remote_fields:
@@ -271,6 +279,14 @@ def validate_ssh_target(entry):
             isinstance(v, str) and v.strip()
             for v in (entry.get("remote_host"), entry.get("remote_user"))
         ):
+            return None
+
+        password = entry.get("password")
+        if password is not None and (not isinstance(password, str) or not password.strip()):
+            return None
+
+        passkey_file = entry.get("passkey_file")
+        if passkey_file is not None and (not isinstance(passkey_file, str) or not passkey_file.strip()):
             return None
 
         port = entry.get("remote_port", 22)
