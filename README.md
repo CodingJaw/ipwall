@@ -17,8 +17,8 @@ Users can add/refresh their current IP, and admins can request temporary SSH acc
 - `src/app.py` — Flask web app and YAML syncing logic.
 - `src/templates/` — UI templates.
 - `src/static/` — Bootstrap assets and icons.
-- `ipscript/firewall_sync.py` — host-side timer reconciler that fans out desired state to SSH targets.
-- `ipscript/remote_sync.py` — remote-side deterministic `iptables` reconciler.
+- `ipscript/remote_sync.py` — host-side timer reconciler that fans out desired state to SSH targets.
+- `ipscript/firewall_sync.py` — remote-side deterministic `iptables` reconciler.
 - `ipscript/sync_schema.py` — pure payload/response validation helpers used by sync scripts.
 - `ipscript/firewall_install.py` — installer/manager for the sync script (systemd or cron).
 - `ipscript/ipwall-firewall.service` — sample systemd service unit.
@@ -237,17 +237,17 @@ http:
 ## SSH firewall sync architecture
 
 Flask (`src/app.py`) only writes desired state (`user_data.yml` + `ip_whitelist.yml`).
-Host-side reconciliation is performed by the timer job running `ipscript/firewall_sync.py`.
+Host-side reconciliation is performed by the timer job running `ipscript/remote_sync.py`.
 
-`ipscript/firewall_sync.py`:
+`ipscript/remote_sync.py`:
 
 - Reads `USER_DATA_FILE` (default `user_data.yml`).
 - Computes desired SSH state per target from active `ssh_targets` grants.
 - Loads target transport config from `UI_CONFIG_FILE`.
-- Calls `remote_sync.py` locally (localhost targets) or over SSH (remote targets).
+- Calls `firewall_sync.py` locally (localhost targets) or over SSH (remote targets).
 - Verifies returned applied state and writes per-target results to `REMOTE_SYNC_LOG_FILE` (default `remote_sync_results.log`).
 
-`ipscript/remote_sync.py` (runs on each target host):
+`ipscript/firewall_sync.py` (runs on each target host):
 
 - Receives desired state JSON on stdin (`chain`, `target_id`, `request_id`, `ips`).
 - Reconciles `iptables` rules atomically for the configured chain.
@@ -281,7 +281,7 @@ Example:
       "remote_host": "main-bastion.example.com",
       "remote_user": "ipwall",
       "remote_port": 22,
-      "remote_script": "/usr/local/bin/ipwall-remote-sync"
+      "remote_script": "/usr/local/bin/ipwall-firewall-sync"
     }
   ]
 }
@@ -289,7 +289,7 @@ Example:
 
 ### Runtime behavior
 
-- Timer invokes host-side `ipscript/firewall_sync.py` on schedule.
+- Timer invokes host-side `ipscript/remote_sync.py` on schedule.
 - Host computes full desired state from `user_data.yml` each run.
 - For each configured target, host sends desired IP list as JSON payload.
 - For localhost targets, host invokes the same remote script locally (no SSH transport).
@@ -303,7 +303,7 @@ The remote script should be idempotent and must only modify the `IPWALL_SSH` cha
 
 ```bash
 echo '{"chain":"IPWALL_SSH","target_id":"main-bastion","request_id":"req-123","ips":["203.0.113.5"]}' \
-  | /usr/local/bin/ipwall-remote-sync
+  | /usr/local/bin/ipwall-firewall-sync
 ```
 
 Recommended implementation approach:
@@ -317,7 +317,7 @@ Recommended implementation approach:
 On each remote host, create a dedicated key pair and restrict the authorized key with a forced command:
 
 ```text
-command=\"/usr/local/bin/ipwall-remote-sync-wrapper\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 AAAA... main-ipwall
+command=\"/usr/local/bin/ipwall-firewall-sync-wrapper\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 AAAA... main-ipwall
 ```
 
 Suggested wrapper behavior:
