@@ -10,14 +10,16 @@ Users can add/refresh their current IP, and admins can request temporary SSH acc
 - Registered IPs are timestamped and automatically expired after inactivity.
 - The app continuously syncs all valid IPs into a whitelist YAML file for proxy enforcement.
 - Admin users can mark an IP for temporary SSH access (1h, 2h, 4h, 8h, 12h, 24h).
-- A separate firewall sync script applies SSH access to an `iptables` chain and revokes expired SSH grants.
+- A host-side firewall sync script computes desired SSH access and reconciles local/remote targets.
 
 ## Repository layout
 
 - `src/app.py` — Flask web app and YAML syncing logic.
 - `src/templates/` — UI templates.
 - `src/static/` — Bootstrap assets and icons.
-- `ipscript/firewall_sync.py` — deterministic SSH firewall rule reconciler.
+- `ipscript/firewall_sync.py` — host-side timer reconciler that fans out desired state to SSH targets.
+- `ipscript/remote_sync.py` — remote-side deterministic `iptables` reconciler.
+- `ipscript/sync_schema.py` — pure payload/response validation helpers used by sync scripts.
 - `ipscript/firewall_install.py` — installer/manager for the sync script (systemd or cron).
 - `ipscript/ipwall-firewall.service` — sample systemd service unit.
 
@@ -232,19 +234,24 @@ http:
 - `POST /revoke_ssh` — admin-only SSH revocation by IP.
 - `POST /clear_all_users` — admin-only destructive reset (requires typing `YES`).
 
-## SSH firewall sync
+## SSH firewall sync architecture
+
+Flask (`src/app.py`) only writes desired state (`user_data.yml` + `ip_whitelist.yml`).
+Host-side reconciliation is performed by the timer job running `ipscript/firewall_sync.py`.
 
 `ipscript/firewall_sync.py`:
 
-- Reads `USER_DATA_FILE` (default `/srv/docker-traefik/appdata/ipwall/user_data.yml`).
-- Ensures custom chain `IPWALL_SSH` exists and is linked from `INPUT` for TCP/22.
-- Rebuilds chain from scratch each run based on active `ssh: true` entries.
-- Marks first activation (`enabledssh`, `ssh_enabled_time`) and logs to `/var/log/ipwall_ssh_audit.log`.
-- Auto-revokes expired SSH grants (`ssh_hours`, default 4h).
+- Reads `USER_DATA_FILE` (default `user_data.yml`).
+- Computes desired SSH state per target from active `ssh_targets` grants.
+- Loads target transport config from `UI_CONFIG_FILE`.
+- Calls `remote_sync.py` locally (localhost targets) or over SSH (remote targets).
+- Verifies returned applied state and writes per-target results to `REMOTE_SYNC_LOG_FILE` (default `remote_sync_results.log`).
 
-## Remote SSH sync (push from main server)
+`ipscript/remote_sync.py` (runs on each target host):
 
-The Flask app can push SSH grant/revoke updates from the main server to selected remote hosts. Remote hosts still apply firewall rules locally.
+- Receives desired state JSON on stdin (`chain`, `target_id`, `request_id`, `ips`).
+- Reconciles `iptables` rules atomically for the configured chain.
+- Returns applied state JSON (`ok`, `applied_ips`, `missing`, `extra`, `errors`).
 
 ### Target mapping in config
 
@@ -282,27 +289,27 @@ Example:
 
 ### Runtime behavior
 
-- On SSH grant (`/add_ip` with selected SSH targets), IPWall runs `ssh` per target and invokes the remote script with `--action grant`.
-- On SSH revoke (`/revoke_ssh` or target removal from an existing IP), IPWall invokes the remote script with `--action revoke`.
-- For localhost targets, IPWall applies desired state by running the reconciler script locally (no SSH transport).
+- Timer invokes host-side `ipscript/firewall_sync.py` on schedule.
+- Host computes full desired state from `user_data.yml` each run.
+- For each configured target, host sends desired IP list as JSON payload.
+- For localhost targets, host invokes the same remote script locally (no SSH transport).
 - Calls are per-target with timeout (default `10s`, env `REMOTE_SYNC_TIMEOUT_SECONDS`).
-- Failures are isolated: one failed target does not block other targets or local YAML persistence.
-- Results are logged to `remote_sync_results.log` (env `REMOTE_SYNC_LOG_FILE`) including timestamp, requester email, IP, action, target, and status.
+- Failures are isolated: one failed target does not block other targets.
+- Results are logged to `remote_sync_results.log` (env `REMOTE_SYNC_LOG_FILE`) including timestamp, requester, target, status, and message.
 
 ### Required remote script contract
 
 The remote script should be idempotent and must only modify the `IPWALL_SSH` chain:
 
 ```bash
-/usr/local/bin/ipwall-remote-sync --chain IPWALL_SSH --action grant --ip 203.0.113.5
-/usr/local/bin/ipwall-remote-sync --chain IPWALL_SSH --action revoke --ip 203.0.113.5
+echo '{"chain":"IPWALL_SSH","target_id":"main-bastion","request_id":"req-123","ips":["203.0.113.5"]}' \
+  | /usr/local/bin/ipwall-remote-sync
 ```
 
 Recommended implementation approach:
 
 - Ensure chain exists before updates.
-- For `grant`, add allow rule only if it is not already present.
-- For `revoke`, remove matching rule(s) if present.
+- Build chain from desired list and atomically repoint alias chain.
 - Do not alter unrelated chains/rules.
 
 ### SSH key and forced-command hardening
@@ -315,8 +322,8 @@ command=\"/usr/local/bin/ipwall-remote-sync-wrapper\",no-agent-forwarding,no-por
 
 Suggested wrapper behavior:
 
-- Validate expected flags (`--chain`, `--action`, `--ip`) and reject anything else.
-- Enforce `--chain IPWALL_SSH` regardless of user input.
+- Validate expected JSON payload shape and reject anything else.
+- Enforce `chain=IPWALL_SSH` regardless of user input.
 - Execute only the approved sync script/binary.
 - Log invocations for audit.
 
