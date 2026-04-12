@@ -20,7 +20,7 @@ Users can add/refresh their current IP, and admins can request temporary SSH acc
 - `ipscript/remote_sync.py` — host-side timer reconciler that fans out desired state to SSH targets.
 - `ipscript/firewall_sync.py` — remote-side deterministic `iptables` reconciler.
 - `ipscript/sync_schema.py` — pure payload/response validation helpers used by sync scripts.
-- `ipscript/firewall_install.py` — installer/manager for the sync script (systemd or cron).
+- `ipscript/firewall_install.py` — installer/manager with explicit host/remote install modes.
 - `ipscript/ipwall-firewall.service` — sample systemd service unit.
 
 ## Requirements
@@ -331,24 +331,52 @@ Also ensure the main server has remote host keys pinned in `known_hosts`, becaus
 
 ## Installing the firewall sync job
 
-Use `ipscript/firewall_install.py` as root:
+Use `ipscript/firewall_install.py` as root. It now has explicit install modes:
+
+- **Host mode** installs the host reconciler script (`remote_sync.py`) plus systemd service/timer.
+- **Remote mode** installs only the remote on-demand applier executable (no timer).
+
+Host install:
 
 ```bash
 cd ipscript
-sudo python3 firewall_install.py --install
+sudo python3 firewall_install.py --install --mode host
+```
+
+Remote install (fixed path used by SSH command):
+
+```bash
+cd ipscript
+sudo python3 firewall_install.py --install --mode remote \
+  --remote-path /usr/local/bin/ipwall-firewall-sync
+```
+
+The `remote_script` value in `config/ui_config.json` must match the installed remote path exactly:
+
+```json
+{
+  "remote_script": "/usr/local/bin/ipwall-firewall-sync"
+}
 ```
 
 Common commands:
 
 ```bash
-sudo python3 firewall_install.py --install --timer 120
-sudo python3 firewall_install.py --install --method cron
-sudo python3 firewall_install.py --upgrade
+# Host mode
+sudo python3 firewall_install.py --install --mode host --timer 120
+sudo python3 firewall_install.py --upgrade --mode host
+sudo python3 firewall_install.py --remove --mode host
+
+# Remote mode (no timer)
+sudo python3 firewall_install.py --install --mode remote
+sudo python3 firewall_install.py --upgrade --mode remote
+sudo python3 firewall_install.py --remove --mode remote
+
+# Host timer management/status
 sudo python3 firewall_install.py --enable
 sudo python3 firewall_install.py --disable
 sudo python3 firewall_install.py --status
 sudo python3 firewall_install.py --doctor
-sudo python3 firewall_install.py --remove
 ```
 
 Run `--examples` for full usage examples.
