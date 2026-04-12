@@ -13,7 +13,6 @@ from flask import (
     abort, session
 )
 
-from remote_sync import sync_all_target_states
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -24,6 +23,7 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
 USER_DATA_FILE = "user_data.yml"
 IP_WHITELIST_FILE = "ip_whitelist.yml"
+USER_DATA_META_KEY = "_meta"
 
 # --------------------------------------------------
 # Settings
@@ -395,6 +395,29 @@ def save_yaml(file_path, data):
         yaml.safe_dump(data, f, sort_keys=False)
 
 
+def iter_user_records(data):
+    for key, value in data.items():
+        if key == USER_DATA_META_KEY:
+            continue
+        if isinstance(value, dict):
+            yield key, value
+
+
+def mark_desired_state_change(data):
+    meta = data.setdefault(USER_DATA_META_KEY, {})
+    if not isinstance(meta, dict):
+        meta = {}
+        data[USER_DATA_META_KEY] = meta
+
+    meta["last_change_at"] = datetime.utcnow().isoformat()
+    current_version = meta.get("desired_state_version", 0)
+    try:
+        current_version = int(current_version)
+    except Exception:
+        current_version = 0
+    meta["desired_state_version"] = current_version + 1
+
+
 # --------------------------------------------------
 # Expired IP Cleanup
 # --------------------------------------------------
@@ -405,9 +428,9 @@ def cleanup_expired_ips(data):
 
     changed = False
 
-    for email in list(data.keys()):
+    for email, user_record in list(iter_user_records(data)):
 
-        ips = data[email].get("ips", [])
+        ips = user_record.get("ips", [])
         new_list = []
 
         for entry in ips:
@@ -448,7 +471,7 @@ def compute_all_valid_ips(data):
 
     result = set()
 
-    for user in data.values():
+    for _, user in iter_user_records(data):
 
         for entry in user.get("ips", []):
 
@@ -492,18 +515,6 @@ def update_whitelist_if_changed(user_data):
         save_yaml(IP_WHITELIST_FILE, whitelist)
 
 
-def reconcile_remote_targets(user_data, requester_email):
-    try:
-        result = sync_all_target_states(
-            user_data=user_data,
-            requester_email=requester_email,
-        )
-        return result
-    except Exception as exc:
-        app.logger.warning("Remote target reconciliation failed: %s", exc)
-        return None
-
-
 # --------------------------------------------------
 # Routes
 # --------------------------------------------------
@@ -516,8 +527,8 @@ def index():
     data = load_yaml(USER_DATA_FILE)
 
     if cleanup_expired_ips(data):
+        mark_desired_state_change(data)
         save_yaml(USER_DATA_FILE, data)
-        reconcile_remote_targets(data, "system:periodic-reconcile")
 
     update_whitelist_if_changed(data)
 
@@ -603,7 +614,9 @@ def add_ip():
 
     data = load_yaml(USER_DATA_FILE)
 
-    cleanup_expired_ips(data)
+    if cleanup_expired_ips(data):
+        mark_desired_state_change(data)
+        save_yaml(USER_DATA_FILE, data)
 
     user = data.setdefault(identity["email"], {"ips": []})
 
@@ -700,19 +713,10 @@ def add_ip():
 
         flash("IP added", "success")
 
+    mark_desired_state_change(data)
     save_yaml(USER_DATA_FILE, data)
 
     update_whitelist_if_changed(data)
-
-    if is_admin(identity["groups"]):
-        sync_result = reconcile_remote_targets(data, identity["email"])
-        if sync_result is None or sync_result["failed"] > 0:
-            succeeded = sync_result["succeeded"] if sync_result else 0
-            failed = sync_result["failed"] if sync_result else "all"
-            flash(
-                f"Remote target sync partially applied ({succeeded} success, {failed} failed)",
-                "warning"
-            )
 
     return redirect(url_for("index"))
 
@@ -742,14 +746,10 @@ def remove_ip():
         if not user["ips"]:
             del data[identity["email"]]
 
+    mark_desired_state_change(data)
     save_yaml(USER_DATA_FILE, data)
 
     update_whitelist_if_changed(data)
-
-    if is_admin(identity["groups"]):
-        sync_result = reconcile_remote_targets(data, identity["email"])
-        if sync_result is None or sync_result["failed"] > 0:
-            flash("IP removed locally but remote sync failed for one or more targets", "warning")
 
     flash("IP removed", "warning")
 
@@ -773,7 +773,7 @@ def revoke_ssh():
 
     data = load_yaml(USER_DATA_FILE)
 
-    for user in data.values():
+    for _, user in iter_user_records(data):
 
         for entry in user.get("ips", []):
 
@@ -790,11 +790,8 @@ def revoke_ssh():
                 if not entry["ssh_targets"]:
                     entry.pop("ssh_targets", None)
 
+    mark_desired_state_change(data)
     save_yaml(USER_DATA_FILE, data)
-
-    result = reconcile_remote_targets(data, identity["email"])
-    if result is None or result["failed"] > 0:
-        flash("SSH revoke updated locally but remote sync failed", "warning")
 
     flash("SSH access revoked", "warning")
 
@@ -819,7 +816,9 @@ def clear_all_users():
         flash("Confirmation failed", "warning")
         return redirect(url_for("index"))
 
-    save_yaml(USER_DATA_FILE, {})
+    data = {}
+    mark_desired_state_change(data)
+    save_yaml(USER_DATA_FILE, data)
 
     whitelist = load_yaml(IP_WHITELIST_FILE)
 
@@ -829,10 +828,6 @@ def clear_all_users():
         .setdefault("ipWhiteList", {})["sourceRange"] = []
 
     save_yaml(IP_WHITELIST_FILE, whitelist)
-
-    result = reconcile_remote_targets({}, identity["email"])
-    if result is None or result["failed"] > 0:
-        flash("Users cleared locally but remote sync failed for one or more targets", "warning")
 
     flash("All user data cleared", "danger")
 
