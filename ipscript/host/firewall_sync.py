@@ -101,8 +101,12 @@ def load_yaml(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f)
-            return loaded if isinstance(loaded, dict) else {}
-    except Exception:
+            if isinstance(loaded, dict):
+                return loaded
+            print(f"[ipwall-sync] YAML root must be an object: {path}", file=sys.stderr)
+            return {}
+    except Exception as exc:
+        print(f"[ipwall-sync] failed to load YAML '{path}': {exc}", file=sys.stderr)
         return {}
 
 
@@ -110,21 +114,25 @@ def load_json(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
-            return loaded if isinstance(loaded, dict) else {}
-    except Exception:
+            if isinstance(loaded, dict):
+                return loaded
+            print(f"[ipwall-sync] JSON root must be an object: {path}", file=sys.stderr)
+            return {}
+    except Exception as exc:
+        print(f"[ipwall-sync] failed to load JSON '{path}': {exc}", file=sys.stderr)
         return {}
 
 
 def parse_sync_target(target):
     if not isinstance(target, dict):
-        return None
+        return None, "target must be an object"
 
     target_id = target.get("id")
     if not isinstance(target_id, str) or not target_id.strip():
-        return None
+        return None, "target.id must be a non-empty string"
 
     if not bool(target.get("enabled", True)):
-        return None
+        return None, "target is disabled"
 
     is_localhost = target.get("localhost") is True
     has_remote_fields = any(
@@ -141,40 +149,43 @@ def parse_sync_target(target):
 
     if is_localhost:
         if has_remote_fields:
-            return None
+            return None, f"target '{target_id.strip()}' marked localhost but includes remote SSH fields"
         return {
             "id": target_id.strip(),
             "type": "local",
             "script": FIREWALL_SYNC_SCRIPT,
-        }
+        }, None
 
     if "localhost" in target:
-        return None
+        return None, f"target '{target_id.strip()}' has invalid localhost value"
 
     host = target.get("remote_host")
     user = target.get("remote_user")
     if not all(isinstance(v, str) and v.strip() for v in (host, user)):
-        return None
+        return None, f"target '{target_id.strip()}' must include remote_host and remote_user"
 
     try:
         port = int(target.get("remote_port", 22))
     except Exception:
-        return None
+        return None, f"target '{target_id.strip()}' has invalid remote_port"
 
     if port < 1 or port > 65535:
-        return None
+        return None, f"target '{target_id.strip()}' remote_port out of range: {port}"
 
     password = target.get("password")
     if password is not None:
         if not isinstance(password, str) or not password.strip():
-            return None
+            return None, f"target '{target_id.strip()}' has invalid password"
         password = password.strip()
 
     passkey_file = target.get("passkey_file")
     if passkey_file is not None:
         if not isinstance(passkey_file, str) or not passkey_file.strip():
-            return None
+            return None, f"target '{target_id.strip()}' has invalid passkey_file"
         passkey_file = passkey_file.strip()
+
+    if password is None and passkey_file is None:
+        return None, f"target '{target_id.strip()}' must set password and/or passkey_file"
 
     return {
         "id": target_id.strip(),
@@ -185,7 +196,7 @@ def parse_sync_target(target):
         "script": str(target.get("remote_script", FIREWALL_SYNC_SCRIPT)).strip() or FIREWALL_SYNC_SCRIPT,
         "password": password,
         "passkey_file": passkey_file,
-    }
+    }, None
 
 
 def load_target_map(path=UI_CONFIG_FILE):
@@ -194,15 +205,27 @@ def load_target_map(path=UI_CONFIG_FILE):
     allow_multiple_localhost_targets = bool(raw.get("allow_multiple_localhost_targets", False))
     localhost_seen = False
 
-    for target in raw.get("ssh_targets", []):
-        parsed_target = parse_sync_target(target)
+    for index, target in enumerate(raw.get("ssh_targets", []), start=1):
+        parsed_target, parse_error = parse_sync_target(target)
         if not parsed_target:
+            if parse_error and parse_error != "target is disabled":
+                print(f"[ipwall-sync] invalid ssh_targets[{index}]: {parse_error}", file=sys.stderr)
             continue
 
         if parsed_target["type"] == "local":
             if localhost_seen and not allow_multiple_localhost_targets:
+                print(
+                    f"[ipwall-sync] invalid ssh_targets[{index}]: duplicate localhost target not allowed",
+                    file=sys.stderr,
+                )
                 continue
             localhost_seen = True
+
+        if parsed_target["id"] in target_map:
+            print(
+                f"[ipwall-sync] duplicate target id '{parsed_target['id']}' replaced by later entry",
+                file=sys.stderr,
+            )
 
         target_map[parsed_target["id"]] = parsed_target
 
@@ -302,10 +325,13 @@ def build_target_command(target, timeout_seconds):
         return [target["script"]]
 
     cmd = ["ssh"]
-    if target.get("password"):
+    has_password = bool(target.get("password"))
+    has_key = bool(target.get("passkey_file"))
+
+    if has_password:
         cmd = ["sshpass", "-p", target["password"], *cmd]
 
-    batch_mode_value = "no" if target.get("password") else "yes"
+    batch_mode_value = "no" if has_password else "yes"
     cmd.extend([
         "-o",
         f"BatchMode={batch_mode_value}",
@@ -315,7 +341,14 @@ def build_target_command(target, timeout_seconds):
         f"ConnectTimeout={timeout_seconds}",
     ])
 
-    if target.get("passkey_file"):
+    if has_password and has_key:
+        cmd.extend(["-o", "PreferredAuthentications=publickey,password"])
+    elif has_password:
+        cmd.extend(["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"])
+    elif has_key:
+        cmd.extend(["-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no"])
+
+    if has_key:
         cmd.extend(["-i", target["passkey_file"]])
 
     cmd.extend([
