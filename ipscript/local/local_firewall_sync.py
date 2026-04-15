@@ -98,26 +98,37 @@ def target_state_active(target, now_utc):
 def desired_local_ips(user_data, local_target_id):
     now_utc = utc_now()
     desired = set()
+    stats = {
+        "users_scanned": 0,
+        "ip_entries_scanned": 0,
+        "valid_ips": 0,
+        "active_grants_scanned": 0,
+        "local_target_matches": 0,
+    }
 
     for user_key, user in user_data.items():
         if user_key == "_meta" or not isinstance(user, dict):
             continue
+        stats["users_scanned"] += 1
 
         for entry in user.get("ips", []):
             if not isinstance(entry, dict):
                 continue
+            stats["ip_entries_scanned"] += 1
 
             raw_ip = entry.get("ip")
             try:
                 ip_value = str(ipaddress.ip_address(raw_ip))
             except Exception:
                 continue
+            stats["valid_ips"] += 1
 
             ssh_targets = entry.get("ssh_targets", [])
             if not isinstance(ssh_targets, list):
                 continue
 
             for target in ssh_targets:
+                stats["active_grants_scanned"] += 1
                 if not target_state_active(target, now_utc):
                     continue
 
@@ -127,8 +138,9 @@ def desired_local_ips(user_data, local_target_id):
 
                 if target_id.strip() == local_target_id:
                     desired.add(ip_value)
+                    stats["local_target_matches"] += 1
 
-    return sorted(desired)
+    return sorted(desired), stats
 
 
 def chain_exists(chain):
@@ -319,7 +331,10 @@ def main():
     lock = acquire_lock(LOCK_FILE)
     try:
         user_data = load_yaml(USER_DATA_FILE)
-        desired_ips = desired_local_ips(user_data, LOCAL_TARGET_ID)
+        if not os.path.exists(USER_DATA_FILE):
+            raise RuntimeError(f"USER_DATA_FILE not found: {USER_DATA_FILE}")
+
+        desired_ips, discovery = desired_local_ips(user_data, LOCAL_TARGET_ID)
         fingerprint = state_fingerprint(USER_DATA_FILE, user_data)
         previous = load_last_state(STATE_FILE)
         previous_fingerprint = previous.get("fingerprint") if isinstance(previous, dict) else {}
@@ -329,6 +344,9 @@ def main():
                 "ok": True,
                 "skipped": True,
                 "reason": "user_data unchanged",
+                "user_data_file": USER_DATA_FILE,
+                "local_target_id": LOCAL_TARGET_ID,
+                "discovery": discovery,
                 "fingerprint": fingerprint,
                 "desired_ips": desired_ips,
             }, separators=(",", ":")))
@@ -339,6 +357,9 @@ def main():
             "ok": True,
             "skipped": False,
             "dry_run": bool(args.dry_run),
+            "user_data_file": USER_DATA_FILE,
+            "local_target_id": LOCAL_TARGET_ID,
+            "discovery": discovery,
             "fingerprint": fingerprint,
             "chain": LOCAL_CHAIN,
             **result,
