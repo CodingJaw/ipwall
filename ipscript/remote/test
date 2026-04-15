@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import ipaddress
+import json
+import random
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_PATH = Path(__file__).resolve().parent / "remote_ipscript.py"
+
+
+def random_test_ip():
+    host = random.randint(1, 254)
+    return str(ipaddress.ip_address(f"198.51.100.{host}"))
+
+
+def run_cmd(args):
+    completed = subprocess.run(args, text=True, capture_output=True, check=False)
+    print(f"$ {' '.join(args)}")
+    if completed.stdout.strip():
+        print(completed.stdout.strip())
+    if completed.stderr.strip():
+        print(completed.stderr.strip(), file=sys.stderr)
+    if completed.returncode != 0:
+        raise RuntimeError(f"command failed ({completed.returncode})")
+
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("remote script did not emit JSON") from exc
+
+    if not parsed.get("ok"):
+        raise RuntimeError(f"script error: {parsed}")
+
+    return parsed
+
+
+def main():
+    ip_value = random_test_ip()
+    python_exec = sys.executable
+
+    add_args = [python_exec, str(SCRIPT_PATH), "--dry-run", "--add-ip", ip_value]
+    del_args = [python_exec, str(SCRIPT_PATH), "--dry-run", "--del-ip", ip_value]
+
+    add_result = run_cmd(add_args)
+    del_result = run_cmd(del_args)
+
+    print("\nSummary")
+    print(json.dumps(
+        {
+            "test_ip": ip_value,
+            "add_action": add_result.get("action"),
+            "add_commands": add_result.get("planned_commands", []),
+            "del_action": del_result.get("action"),
+            "del_commands": del_result.get("planned_commands", []),
+        },
+        indent=2,
+    ))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
