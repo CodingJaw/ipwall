@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import fcntl
 import ipaddress
 import json
@@ -7,9 +8,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 
 REQUEST_REQUIRED_KEYS = ("chain", "target_id", "request_id", "ips")
 RESPONSE_REQUIRED_KEYS = ("ok", "applied_ips", "missing", "extra", "errors")
+DEFAULT_CHAIN = os.environ.get("REMOTE_SYNC_CHAIN", "IPWALL_SSH")
 
 
 def _validate_exact_keys(payload, required_keys, object_name):
@@ -84,6 +87,7 @@ def build_remote_response(ok, applied_ips, missing, extra, errors):
         "extra": list(extra),
         "errors": [str(err) for err in errors],
     }
+
 
 SSH_PORT = "22"
 LOCK_DIR = "/var/lock"
@@ -323,10 +327,82 @@ def get_chain_applied_ips(chain, errors):
     return sorted(applied)
 
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="IPWall remote iptables synchronizer")
+    parser.add_argument("--chain", default=DEFAULT_CHAIN, help="iptables alias chain name")
+    parser.add_argument("--target-id", default="manual", help="target identifier for JSON request mode")
+    parser.add_argument("--request-id", default="", help="request identifier for JSON request mode")
+    parser.add_argument("--dry-run", action="store_true", help="validate and report only, no iptables changes")
+    parser.add_argument("--add-ip", help="add one IP to current chain state")
+    parser.add_argument("--rm-ip", help="remove one IP from current chain state")
+    return parser.parse_args(argv)
 
 
-def main():
-    stdin_text = sys.stdin.read()
+def normalize_single_ip(raw_ip, option_name):
+    try:
+        return str(ipaddress.ip_address(raw_ip))
+    except Exception:
+        raise ValueError(f"{option_name} requires a valid IP address")
+
+
+def read_stdin_payload():
+    if sys.stdin.isatty():
+        return ""
+    return sys.stdin.read()
+
+
+def run_sync(chain, desired_ips, dry_run):
+    errors = []
+    if not dry_run:
+        try:
+            apply_desired_state(chain, desired_ips)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if dry_run and not chain_exists(chain):
+        applied_ips = []
+    else:
+        applied_ips = get_chain_applied_ips(chain, errors)
+
+    missing = sorted(set(desired_ips) - set(applied_ips))
+    extra = sorted(set(applied_ips) - set(desired_ips))
+
+    if dry_run:
+        ok = len(errors) == 0
+    else:
+        ok = (len(errors) == 0) and (len(missing) == 0) and (len(extra) == 0)
+
+    for err in errors:
+        eprint(err)
+
+    print(json.dumps(build_remote_response(ok, applied_ips, missing, extra, errors), separators=(",", ":")))
+    return 0 if ok else 1
+
+
+def run_cli_mode(args):
+    if args.add_ip and args.rm_ip:
+        error = "--add-ip and --rm-ip cannot be used together"
+        eprint(error)
+        print(json.dumps(build_remote_response(False, [], [], [], [error]), separators=(",", ":")))
+        return 1
+
+    desired_ips = get_chain_applied_ips(args.chain, [])
+
+    try:
+        if args.add_ip:
+            desired_ips = sorted(set(desired_ips + [normalize_single_ip(args.add_ip, "--add-ip")]))
+        elif args.rm_ip:
+            remove_ip = normalize_single_ip(args.rm_ip, "--rm-ip")
+            desired_ips = sorted(ip for ip in desired_ips if ip != remove_ip)
+    except ValueError as exc:
+        eprint(str(exc))
+        print(json.dumps(build_remote_response(False, [], [], [], [str(exc)]), separators=(",", ":")))
+        return 1
+
+    return run_sync(args.chain, desired_ips, args.dry_run)
+
+
+def run_json_mode(stdin_text, args):
     payload, errors = parse_remote_request(stdin_text)
 
     if payload is None:
@@ -344,22 +420,28 @@ def main():
         print(json.dumps(build_remote_response(False, [], desired_ips, [], errors), separators=(",", ":")))
         return 1
 
-    try:
-        apply_desired_state(chain, desired_ips)
-    except Exception as exc:
-        errors.append(str(exc))
+    return run_sync(chain, desired_ips, args.dry_run)
 
-    applied_ips = get_chain_applied_ips(chain, errors)
-    missing = sorted(set(desired_ips) - set(applied_ips))
-    extra = sorted(set(applied_ips) - set(desired_ips))
 
-    ok = (len(errors) == 0) and (len(missing) == 0) and (len(extra) == 0)
+def main(argv=None):
+    args = parse_args(argv or sys.argv[1:])
+    stdin_text = read_stdin_payload()
 
-    for err in errors:
-        eprint(err)
+    if args.add_ip or args.rm_ip:
+        return run_cli_mode(args)
 
-    print(json.dumps(build_remote_response(ok, applied_ips, missing, extra, errors), separators=(",", ":")))
-    return 0 if ok else 1
+    if stdin_text.strip():
+        return run_json_mode(stdin_text, args)
+
+    request_id = args.request_id or str(uuid.uuid4())
+    payload = {
+        "chain": args.chain,
+        "target_id": args.target_id,
+        "request_id": request_id,
+        "ips": get_chain_applied_ips(args.chain, []),
+    }
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0
 
 
 if __name__ == "__main__":

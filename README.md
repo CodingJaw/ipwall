@@ -252,6 +252,8 @@ Host-side reconciliation is performed by the timer job running `ipscript/remote_
 - Receives desired state JSON on stdin (`chain`, `target_id`, `request_id`, `ips`).
 - Reconciles `iptables` rules atomically for the configured chain.
 - Returns applied state JSON (`ok`, `applied_ips`, `missing`, `extra`, `errors`).
+- Also supports direct CLI shell-wrapper operations: `--add-ip`, `--rm-ip`, and `--dry-run` against its own chain only.
+- Includes `ipscript/client/test.py` to locally validate add/remove behavior on an isolated test chain.
 
 ### Target mapping in config
 
