@@ -318,6 +318,14 @@ def main():
     # 3) Install shell wrapper that only executes the app via sudo.
     wrapper_content = (
         "#!/bin/sh\n"
+        "if [ \"${1:-}\" = \"-c\" ]; then\n"
+        "  shift\n"
+        "  case \"${1:-}\" in\n"
+        "    \"${0}\"|*/ipwall-shell)\n"
+        "      shift\n"
+        "      ;;\n"
+        "  esac\n"
+        "fi\n"
         f"exec /usr/bin/sudo -n {remote_script_path} \"$@\"\n"
     )
     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp_wrapper:
