@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import fcntl
 import ipaddress
 import json
 import os
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 
 REMOTE_CHAIN = os.environ.get("IPWALL_REMOTE_CHAIN", "IPWALL_REMOTE_SSH")
 SSH_PORT = os.environ.get("SSH_PORT", "22")
+LOCK_FILE = os.environ.get("IPWALL_REMOTE_LOCK_FILE", "/var/run/ipwall.lock")
 CHAIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,28}$")
 RESERVED_CHAINS = {"INPUT", "OUTPUT", "FORWARD", "PREROUTING", "POSTROUTING"}
 
@@ -95,10 +97,69 @@ def ensure_return_rule(chain, dry_run=False, command_log=None):
         run_cmd(["iptables", "-A", chain, "-j", "RETURN"], dry_run=dry_run, command_log=command_log)
 
 
+def ensure_established_rule(chain, dry_run=False, command_log=None):
+    if dry_run:
+        if isinstance(command_log, list):
+            command_log.append(
+                f"iptables -I {chain} 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT  # if missing",
+            )
+        return
+
+    check_established = run_cmd(
+        [
+            "iptables",
+            "-C",
+            chain,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ],
+        check=False,
+    )
+    if check_established.returncode != 0:
+        run_cmd(
+            [
+                "iptables",
+                "-I",
+                chain,
+                "1",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED,RELATED",
+                "-j",
+                "ACCEPT",
+            ],
+            dry_run=dry_run,
+            command_log=command_log,
+        )
+
+
+def ensure_return_last(chain, dry_run=False, command_log=None):
+    if dry_run:
+        if isinstance(command_log, list):
+            command_log.append(f"iptables -D {chain} -j RETURN  # until absent")
+            command_log.append(f"iptables -A {chain} -j RETURN")
+        return
+
+    while True:
+        delete_return = run_cmd(["iptables", "-D", chain, "-j", "RETURN"], check=False)
+        if delete_return.returncode != 0:
+            break
+        if isinstance(command_log, list):
+            command_log.append(f"iptables -D {chain} -j RETURN")
+
+    run_cmd(["iptables", "-A", chain, "-j", "RETURN"], dry_run=dry_run, command_log=command_log)
+
+
 def get_applied_ips(chain):
     completed = run_cmd(["iptables", "-S", chain], check=False)
     if completed.returncode != 0:
-        return []
+        stderr = (completed.stderr or "").strip()
+        raise RuntimeError(f"failed to inspect iptables chain {chain}: {stderr}")
 
     applied = set()
     for line in (completed.stdout or "").splitlines():
@@ -122,7 +183,7 @@ def add_ip_rule(chain, ip_value, dry_run=False, command_log=None):
             "iptables",
             "-I",
             chain,
-            "1",
+            "2",
             "-p",
             "tcp",
             "-s",
@@ -168,8 +229,13 @@ def remove_ip_rule(chain, ip_value, dry_run=False, command_log=None):
 def reconcile_chain(chain, desired_ips, dry_run=False):
     command_log = []
     ensure_chain_and_jump(chain, dry_run=dry_run, command_log=command_log)
+    ensure_established_rule(chain, dry_run=dry_run, command_log=command_log)
+    ensure_return_last(chain, dry_run=dry_run, command_log=command_log)
 
-    before = get_applied_ips(chain)
+    if dry_run:
+        before = []
+    else:
+        before = get_applied_ips(chain)
     before_set = set(before)
     desired_set = set(desired_ips)
 
@@ -181,7 +247,7 @@ def reconcile_chain(chain, desired_ips, dry_run=False):
     for ip_value in to_add:
         add_ip_rule(chain, ip_value, dry_run=dry_run, command_log=command_log)
 
-    ensure_return_rule(chain, dry_run=dry_run, command_log=command_log)
+    ensure_return_last(chain, dry_run=dry_run, command_log=command_log)
 
     return {
         "before": before,
@@ -216,6 +282,8 @@ def load_stdin_payload():
 def run_single_action(chain, dry_run, add_ip=None, del_ip=None):
     command_log = []
     ensure_chain_and_jump(chain, dry_run=dry_run, command_log=command_log)
+    ensure_established_rule(chain, dry_run=dry_run, command_log=command_log)
+    ensure_return_last(chain, dry_run=dry_run, command_log=command_log)
 
     action = None
     normalized = None
@@ -228,7 +296,7 @@ def run_single_action(chain, dry_run, add_ip=None, del_ip=None):
         normalized = normalize_ip(del_ip)
         remove_ip_rule(chain, normalized, dry_run=dry_run, command_log=command_log)
 
-    ensure_return_rule(chain, dry_run=dry_run, command_log=command_log)
+    ensure_return_last(chain, dry_run=dry_run, command_log=command_log)
 
     return {
         "ok": True,
@@ -295,11 +363,16 @@ def main():
     if (not args.dry_run) and os.geteuid() != 0:
         raise RuntimeError("must run as root unless using --dry-run")
 
-    if single_mode:
-        result = run_single_action(chain, args.dry_run, add_ip=args.add_ip, del_ip=args.del_ip)
-    else:
-        payload = load_stdin_payload()
-        result = run_payload_action(chain, args.dry_run, payload)
+    lock_path = LOCK_FILE
+    if args.dry_run and os.geteuid() != 0:
+        lock_path = "/tmp/ipwall.lock"
+    with open(lock_path, "w", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        if single_mode:
+            result = run_single_action(chain, args.dry_run, add_ip=args.add_ip, del_ip=args.del_ip)
+        else:
+            payload = load_stdin_payload()
+            result = run_payload_action(chain, args.dry_run, payload)
 
     print(json.dumps(result, separators=(",", ":")))
     return 0
