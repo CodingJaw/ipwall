@@ -29,6 +29,15 @@ def parse_args():
     parser.add_argument("--remote-script-name", default="remote_ipscript.py", help="Installed remote script name")
     parser.add_argument("--wrapper-name", default="ipwall-shell", help="Installed SSH shell-wrapper name")
     parser.add_argument("--sudoers-file", default="/etc/sudoers.d/ipwall-remote", help="Sudoers policy file path")
+    parser.add_argument(
+        "--authorized-key-file",
+        help="Path to local SSH public key file to install with forced-command restrictions",
+    )
+    parser.add_argument(
+        "--authorized-keys-path",
+        default=".ssh/authorized_keys",
+        help="Path inside the managed user's home for authorized keys",
+    )
     parser.add_argument("--generate-certs", action="store_true", help="Generate and install self-signed cert/key")
     parser.add_argument("--cert-cn", default="ipwall.local", help="Certificate CN when --generate-certs is set")
     parser.add_argument("--cert-days", default=365, type=int, help="Certificate validity days")
@@ -86,6 +95,7 @@ def main():
     remote_script_q = shlex.quote(remote_script_path)
     remote_wrapper_q = shlex.quote(remote_wrapper_path)
     home_dir_q = shlex.quote(f"/var/lib/{args.user}")
+    user_home = f"/var/lib/{args.user}"
 
     # 1) Ensure group/user exist and are restricted.
     run_ssh(
@@ -100,6 +110,9 @@ def main():
                     f"--home-dir {home_dir_q} --shell {remote_wrapper_q} {user_q}; "
                     "fi"
                 ),
+                f"mkdir -p {home_dir_q}",
+                f"chown {user_q}:{group_q} {home_dir_q}",
+                f"chmod 750 {home_dir_q}",
                 f"mkdir -p {install_dir_q} {remote_bin_dir_q}",
                 f"chown root:root {install_dir_q} {remote_bin_dir_q}",
                 f"chmod 755 {install_dir_q} {remote_bin_dir_q}",
@@ -184,6 +197,59 @@ def main():
         ),
     )
 
+    # 4b) Optional authorized_keys install with strict forced-command restrictions.
+    if args.authorized_key_file:
+        key_path = Path(args.authorized_key_file)
+        if not key_path.exists():
+            print(f"ERROR: authorized key file not found: {key_path}", file=sys.stderr)
+            return 1
+
+        key_lines = [line.strip() for line in key_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not key_lines:
+            print(f"ERROR: authorized key file is empty: {key_path}", file=sys.stderr)
+            return 1
+
+        forced_prefix = (
+            f'command="{remote_wrapper_path}",'
+            "no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding "
+        )
+        restricted_lines = []
+        for key_line in key_lines:
+            if key_line.startswith("command="):
+                restricted_lines.append(key_line)
+            else:
+                restricted_lines.append(f"{forced_prefix}{key_line}")
+
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp_auth:
+            tmp_auth.write("\n".join(restricted_lines) + "\n")
+            local_auth = tmp_auth.name
+
+        try:
+            tmp_remote_auth = "/tmp/ipwall.authorized_keys.tmp"
+            run_command(
+                scp_base(args) + [local_auth, f"{args.root_user}@{args.host}:{tmp_remote_auth}"],
+                dry_run=args.dry_run,
+            )
+        finally:
+            if os.path.exists(local_auth):
+                os.unlink(local_auth)
+
+        remote_authorized_keys = f"{user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}"
+        remote_authorized_keys_q = shlex.quote(remote_authorized_keys)
+        remote_ssh_dir_q = shlex.quote(str(Path(remote_authorized_keys).parent))
+        run_ssh(
+            args,
+            " && ".join(
+                [
+                    f"mkdir -p {remote_ssh_dir_q}",
+                    f"chown {user_q}:{group_q} {remote_ssh_dir_q}",
+                    f"chmod 700 {remote_ssh_dir_q}",
+                    f"install -o {user_q} -g {group_q} -m 600 {shlex.quote(tmp_remote_auth)} {remote_authorized_keys_q}",
+                    f"rm -f {shlex.quote(tmp_remote_auth)}",
+                ]
+            ),
+        )
+
     # 5) Optional cert generation/application.
     if args.generate_certs:
         cert_path = f"{args.cert_dir.rstrip('/')}/ipwall.crt"
@@ -209,6 +275,11 @@ def main():
     print(f"Remote script: {remote_script_path}")
     print(f"SSH wrapper shell: {remote_wrapper_path}")
     print(f"Managed user/group: {args.user}:{args.group}")
+    if args.authorized_key_file:
+        print(f"Authorized keys: {user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}")
+        print("Authorized key restrictions: forced command + no-pty/no-forwarding")
+    else:
+        print("Authorized keys: not installed (set --authorized-key-file to provision restricted SSH access)")
     if args.generate_certs:
         print(f"Certificates: {args.cert_dir.rstrip('/')}/ipwall.crt and ipwall.key")
     return 0
