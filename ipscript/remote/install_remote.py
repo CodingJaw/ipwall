@@ -17,6 +17,14 @@ DEFAULT_CERT_DIR = "/etc/ipwall/certs"
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Install IPWall remote shell wrapper over a root SSH session",
+        epilog=(
+            "Example:\n"
+            "  python3 ipscript/remote/install_remote.py "
+            "--host 203.0.113.10 --root-user root --user ipwall --group ipwall "
+            "--install-dir /opt/ipwall --authorized-key-file /path/to/ipwall.pub "
+            "--generate-certs --cert-cn ipwall.example.com"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--host", required=True, help="Remote host/IP to install on")
     parser.add_argument("--root-user", default="root", help="Remote SSH user with root privileges")
