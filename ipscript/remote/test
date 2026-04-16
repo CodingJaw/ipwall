@@ -36,6 +36,22 @@ def run_cmd(args):
     return parsed
 
 
+def run_stdin_json(payload):
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    print(f"$ {sys.executable} {SCRIPT_PATH} <<JSON")
+    if completed.stdout.strip():
+        print(completed.stdout.strip())
+    if completed.stderr.strip():
+        print(completed.stderr.strip(), file=sys.stderr)
+    return completed
+
+
 def main():
     ip_value = random_test_ip()
     python_exec = sys.executable
@@ -45,6 +61,9 @@ def main():
 
     add_result = run_cmd(add_args)
     del_result = run_cmd(del_args)
+    override_attempt = run_stdin_json({"chain": "INPUT", "ips": [], "dry_run": True})
+    if override_attempt.returncode == 0:
+        raise RuntimeError("expected payload chain override to be rejected")
 
     print("\nSummary")
     print(json.dumps(
@@ -54,6 +73,7 @@ def main():
             "add_commands": add_result.get("planned_commands", []),
             "del_action": del_result.get("action"),
             "del_commands": del_result.get("planned_commands", []),
+            "override_rejected": override_attempt.returncode != 0,
         },
         indent=2,
     ))

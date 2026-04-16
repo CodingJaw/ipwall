@@ -4,12 +4,15 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 
 REMOTE_CHAIN = os.environ.get("IPWALL_REMOTE_CHAIN", "IPWALL_REMOTE_SSH")
 SSH_PORT = os.environ.get("SSH_PORT", "22")
+CHAIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,28}$")
+RESERVED_CHAINS = {"INPUT", "OUTPUT", "FORWARD", "PREROUTING", "POSTROUTING"}
 
 
 def utc_now_iso():
@@ -34,6 +37,23 @@ def normalize_ip(value):
         return str(ipaddress.ip_address(value))
     except Exception as exc:
         raise ValueError(f"invalid ip: {value}") from exc
+
+
+def normalize_chain(value):
+    if not isinstance(value, str):
+        raise ValueError("chain name must be a string")
+
+    chain = value.strip()
+    if not chain:
+        raise ValueError("chain name cannot be empty")
+
+    if chain.upper() in RESERVED_CHAINS:
+        raise ValueError(f"refusing to manage reserved chain: {chain}")
+
+    if not CHAIN_NAME_PATTERN.fullmatch(chain):
+        raise ValueError(f"invalid chain name: {chain}")
+
+    return chain
 
 
 def chain_exists(chain):
@@ -224,8 +244,12 @@ def run_single_action(chain, dry_run, add_ip=None, del_ip=None):
 
 def run_payload_action(chain, dry_run, payload):
     payload_chain = payload.get("chain")
-    if isinstance(payload_chain, str) and payload_chain.strip():
-        chain = payload_chain.strip()
+    if payload_chain is not None:
+        requested_chain = normalize_chain(payload_chain)
+        if requested_chain != chain:
+            raise RuntimeError(
+                f"payload chain override denied: requested={requested_chain} configured={chain}",
+            )
 
     if isinstance(payload.get("dry_run"), bool):
         dry_run = payload["dry_run"]
@@ -266,15 +290,16 @@ def main():
     if args.add_ip and args.del_ip:
         raise RuntimeError("use only one of --add-ip or --del-ip")
 
+    chain = normalize_chain(args.chain)
     single_mode = bool(args.add_ip or args.del_ip)
     if (not args.dry_run) and os.geteuid() != 0:
         raise RuntimeError("must run as root unless using --dry-run")
 
     if single_mode:
-        result = run_single_action(args.chain, args.dry_run, add_ip=args.add_ip, del_ip=args.del_ip)
+        result = run_single_action(chain, args.dry_run, add_ip=args.add_ip, del_ip=args.del_ip)
     else:
         payload = load_stdin_payload()
-        result = run_payload_action(args.chain, args.dry_run, payload)
+        result = run_payload_action(chain, args.dry_run, payload)
 
     print(json.dumps(result, separators=(",", ":")))
     return 0
