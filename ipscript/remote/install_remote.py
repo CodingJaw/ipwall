@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
@@ -62,6 +63,10 @@ def parse_args():
     parser.add_argument("--generate-certs", action="store_true", help="Generate and install self-signed cert/key")
     parser.add_argument("--cert-cn", default="ipwall.local", help="Certificate CN when --generate-certs is set")
     parser.add_argument("--cert-days", default=365, type=int, help="Certificate validity days")
+    parser.add_argument(
+        "--user_data_loc",
+        help="Optional path to UI config JSON file; when set, upsert ssh_targets entry for this remote install",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print SSH/SCP calls without executing")
     return parser.parse_args()
 
@@ -180,6 +185,81 @@ def run_command(cmd, dry_run=False):
 def run_ssh(args, remote_script):
     cmd = ssh_base(args) + [remote_script]
     run_command(cmd, dry_run=args.dry_run)
+
+
+def derive_passkey_file(args, generated_private_key):
+    if generated_private_key:
+        return generated_private_key
+    if not args.authorized_key_file:
+        return None
+    auth_path = Path(args.authorized_key_file)
+    if auth_path.suffix == ".pub":
+        candidate = Path(str(auth_path)[:-4])
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def upsert_ui_config_target(args, remote_script_path, generated_private_key):
+    if not args.user_data_loc:
+        return None
+
+    ui_path = Path(args.user_data_loc)
+    if ui_path.exists():
+        raw = json.loads(ui_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError(f"UI config root must be a JSON object: {ui_path}")
+        data = raw
+    else:
+        data = {"ssh_targets": [], "service_links": []}
+
+    targets = data.get("ssh_targets")
+    if not isinstance(targets, list):
+        targets = []
+    data["ssh_targets"] = targets
+
+    target_id = f"remote-{args.user}-{re.sub(r'[^A-Za-z0-9_.-]+', '-', args.host).strip('-')}"
+    if not target_id:
+        target_id = "remote-target"
+
+    existing_index = None
+    for i, entry in enumerate(targets):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") == target_id:
+            existing_index = i
+            break
+        if entry.get("remote_host") == args.host and entry.get("remote_user") == args.user:
+            existing_index = i
+            break
+
+    passkey_file = derive_passkey_file(args, generated_private_key)
+    existing = targets[existing_index] if existing_index is not None and isinstance(targets[existing_index], dict) else {}
+    merged = {
+        "id": target_id,
+        "name": existing.get("name") if isinstance(existing.get("name"), str) and existing.get("name").strip() else f"{args.host} ({args.user})",
+        "enabled": bool(existing.get("enabled", True)),
+        "remote_host": args.host,
+        "remote_user": args.user,
+        "remote_port": int(args.port),
+        "remote_script": remote_script_path,
+    }
+    if passkey_file:
+        merged["passkey_file"] = passkey_file
+    elif isinstance(existing.get("passkey_file"), str) and existing.get("passkey_file").strip():
+        merged["passkey_file"] = existing.get("passkey_file").strip()
+
+    if existing_index is None:
+        targets.append(merged)
+    else:
+        targets[existing_index] = merged
+
+    if args.dry_run:
+        return {"path": str(ui_path), "target_id": target_id, "dry_run": True}
+
+    ui_path.parent.mkdir(parents=True, exist_ok=True)
+    ui_path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    return {"path": str(ui_path), "target_id": target_id}
 
 
 def build_restricted_authorized_keys(args, remote_wrapper_path):
@@ -462,6 +542,17 @@ def main():
             print("Generated user SSH keypair: reused existing public key only (private key path unavailable)")
     if args.generate_certs:
         print(f"Certificates: {args.cert_dir.rstrip('/')}/ipwall.crt and ipwall.key")
+    if args.user_data_loc:
+        try:
+            updated = upsert_ui_config_target(args, remote_script_path, generated_private_key)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        if updated:
+            if updated.get("dry_run"):
+                print(f"UI config dry-run: would update {updated['path']} (ssh target id: {updated['target_id']})")
+            else:
+                print(f"UI config updated: {updated['path']} (ssh target id: {updated['target_id']})")
     return 0
 
 
