@@ -219,17 +219,33 @@ def build_restricted_authorized_keys(args, remote_wrapper_path):
         else:
             key_prefix.parent.mkdir(parents=True, exist_ok=True)
             key_prefix_pub = Path(f"{key_prefix}.pub")
-            if key_prefix.exists() or key_prefix_pub.exists():
-                raise ValueError(
-                    f"Generated authorized-key output already exists: {key_prefix} (or .pub). "
-                    "Use --generated-authorized-key-prefix to choose another path."
+            if key_prefix_pub.exists():
+                pub_text = key_prefix_pub.read_text(encoding="utf-8").strip()
+                generated_private_key = str(key_prefix) if key_prefix.exists() else None
+                print(f"INFO: Reusing existing generated public key: {key_prefix_pub}", file=sys.stderr)
+                if not pub_text:
+                    raise ValueError(f"Existing generated public key is empty: {key_prefix_pub}")
+            elif key_prefix.exists():
+                try:
+                    pub_text = subprocess.check_output(
+                        ["ssh-keygen", "-y", "-f", str(key_prefix)],
+                        text=True,
+                    ).strip()
+                except subprocess.CalledProcessError as exc:
+                    raise ValueError(
+                        f"Failed to derive public key from existing private key: {key_prefix} ({exc})"
+                    ) from exc
+                key_prefix_pub.write_text(pub_text + "\n", encoding="utf-8")
+                generated_private_key = str(key_prefix)
+                print(f"INFO: Rebuilt missing generated public key: {key_prefix_pub}", file=sys.stderr)
+            else:
+                run_command(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_prefix)],
+                    dry_run=False,
                 )
-            run_command(
-                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_prefix)],
-                dry_run=False,
-            )
-            generated_private_key = str(key_prefix)
-            pub_text = key_prefix_pub.read_text(encoding="utf-8").strip()
+                generated_private_key = str(key_prefix)
+                pub_text = key_prefix_pub.read_text(encoding="utf-8").strip()
+                print(f"INFO: Generated new managed-user keypair: {key_prefix}", file=sys.stderr)
             key_lines = [pub_text] if pub_text else []
             if not key_lines:
                 raise ValueError(f"Generated key is empty: {key_prefix}.pub")
@@ -436,8 +452,10 @@ def main():
     if not args.authorized_key_file:
         if args.dry_run:
             print("Generated user SSH keypair: dry-run placeholder only (no local files created)")
-        else:
+        elif generated_private_key:
             print(f"Generated user SSH keypair (private key path): {generated_private_key}")
+        else:
+            print("Generated user SSH keypair: reused existing public key only (private key path unavailable)")
     if args.generate_certs:
         print(f"Certificates: {args.cert_dir.rstrip('/')}/ipwall.crt and ipwall.key")
     return 0
