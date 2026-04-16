@@ -116,15 +116,6 @@ def validate_args(args):
         ssh_key_path = Path(args.ssh_key)
         if not ssh_key_path.exists():
             raise ValueError(f"SSH identity file not found: {ssh_key_path}")
-        key_text = ssh_key_path.read_text(encoding="utf-8", errors="ignore")
-        if is_probably_public_key(key_text):
-            if ssh_key_path.suffix == ".pub" and Path(str(ssh_key_path)[:-4]).exists():
-                args.ssh_key = str(Path(str(ssh_key_path)[:-4]))
-            else:
-                raise ValueError(
-                    "SSH identity file appears to be a public key. --ssh-key must be a private key "
-                    "(for example ~/.ssh/id_ed25519, not ~/.ssh/id_ed25519.pub)."
-                )
 
     if args.authorized_key_file:
         auth_path = Path(args.authorized_key_file)
