@@ -118,8 +118,8 @@ def validate_args(args):
             raise ValueError(f"SSH identity file not found: {ssh_key_path}")
         key_text = ssh_key_path.read_text(encoding="utf-8", errors="ignore")
         if is_probably_public_key(key_text):
-            if ssh_key_path.suffix == ".pub" and ssh_key_path.with_suffix("").exists():
-                args.ssh_key = str(ssh_key_path.with_suffix(""))
+            if ssh_key_path.suffix == ".pub" and Path(str(ssh_key_path)[:-4]).exists():
+                args.ssh_key = str(Path(str(ssh_key_path)[:-4]))
             else:
                 raise ValueError(
                     "SSH identity file appears to be a public key. --ssh-key must be a private key "
@@ -136,7 +136,7 @@ def validate_args(args):
                 raise ValueError(
                     "--authorized-key-file points to a private key. Provide a public key file instead."
                 )
-            pub_candidate = auth_path.with_suffix(".pub")
+            pub_candidate = Path(f"{auth_path}.pub")
             if pub_candidate.exists():
                 args.authorized_key_file = str(pub_candidate)
             else:
@@ -218,7 +218,8 @@ def build_restricted_authorized_keys(args, remote_wrapper_path):
             )
         else:
             key_prefix.parent.mkdir(parents=True, exist_ok=True)
-            if key_prefix.exists() or key_prefix.with_suffix(".pub").exists():
+            key_prefix_pub = Path(f"{key_prefix}.pub")
+            if key_prefix.exists() or key_prefix_pub.exists():
                 raise ValueError(
                     f"Generated authorized-key output already exists: {key_prefix} (or .pub). "
                     "Use --generated-authorized-key-prefix to choose another path."
@@ -228,7 +229,7 @@ def build_restricted_authorized_keys(args, remote_wrapper_path):
                 dry_run=False,
             )
             generated_private_key = str(key_prefix)
-            pub_text = key_prefix.with_suffix(".pub").read_text(encoding="utf-8").strip()
+            pub_text = key_prefix_pub.read_text(encoding="utf-8").strip()
             key_lines = [pub_text] if pub_text else []
             if not key_lines:
                 raise ValueError(f"Generated key is empty: {key_prefix}.pub")
@@ -278,7 +279,7 @@ def main():
                 (
                     f"if ! id -u {user_q} >/dev/null 2>&1; then "
                     f"useradd --system --gid {group_q} --create-home "
-                    f"--home-dir {home_dir_q} --shell {remote_wrapper_q} {user_q}; "
+                    f"--home-dir {home_dir_q} --shell /usr/sbin/nologin {user_q}; "
                     "fi"
                 ),
                 f"mkdir -p {home_dir_q}",
