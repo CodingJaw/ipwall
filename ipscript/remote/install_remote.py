@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -45,6 +46,13 @@ def parse_args():
     parser.add_argument(
         "--authorized-key-file",
         help="Path to local SSH public key file to install with forced-command restrictions",
+    )
+    parser.add_argument(
+        "--generated-authorized-key-prefix",
+        help=(
+            "When --authorized-key-file is omitted, generate an SSH keypair for the managed user "
+            "using this output path prefix (default: ./ipwall_<host>_<user>)"
+        ),
     )
     parser.add_argument(
         "--authorized-keys-path",
@@ -183,6 +191,58 @@ def run_ssh(args, remote_script):
     run_command(cmd, dry_run=args.dry_run)
 
 
+def build_restricted_authorized_keys(args, remote_wrapper_path):
+    forced_prefix = (
+        f'command="{remote_wrapper_path}",'
+        "no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding "
+    )
+
+    generated_private_key = None
+    if args.authorized_key_file:
+        source_key_path = Path(args.authorized_key_file)
+        key_lines = [line.strip() for line in source_key_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not key_lines:
+            raise ValueError(f"authorized key file is empty: {source_key_path}")
+    else:
+        safe_host = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.host)
+        key_prefix = (
+            Path(args.generated_authorized_key_prefix)
+            if args.generated_authorized_key_prefix
+            else Path.cwd() / f"ipwall_{safe_host}_{args.user}"
+        )
+        if args.dry_run:
+            key_lines = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRYRUNVVEVfRFJZX1JVTl9QTEFDRUhPTERFUg== ipwall-dry-run"]
+            print(
+                "INFO: --authorized-key-file not provided; dry-run mode is using a placeholder generated key.",
+                file=sys.stderr,
+            )
+        else:
+            key_prefix.parent.mkdir(parents=True, exist_ok=True)
+            if key_prefix.exists() or key_prefix.with_suffix(".pub").exists():
+                raise ValueError(
+                    f"Generated authorized-key output already exists: {key_prefix} (or .pub). "
+                    "Use --generated-authorized-key-prefix to choose another path."
+                )
+            run_command(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_prefix)],
+                dry_run=False,
+            )
+            generated_private_key = str(key_prefix)
+            pub_text = key_prefix.with_suffix(".pub").read_text(encoding="utf-8").strip()
+            key_lines = [pub_text] if pub_text else []
+            if not key_lines:
+                raise ValueError(f"Generated key is empty: {key_prefix}.pub")
+
+    restricted_lines = []
+    for key_line in key_lines:
+        if key_line.startswith("command="):
+            restricted_lines.append(key_line)
+        else:
+            restricted_lines.append(f"{forced_prefix}{key_line}")
+
+    return restricted_lines, generated_private_key
+
+
 def main():
     args = parse_args()
     try:
@@ -308,58 +368,42 @@ def main():
         ),
     )
 
-    # 4b) Optional authorized_keys install with strict forced-command restrictions.
-    if args.authorized_key_file:
-        key_path = Path(args.authorized_key_file)
-        if not key_path.exists():
-            print(f"ERROR: authorized key file not found: {key_path}", file=sys.stderr)
-            return 1
+    # 4b) Install authorized_keys with strict forced-command restrictions.
+    try:
+        restricted_lines, generated_private_key = build_restricted_authorized_keys(args, remote_wrapper_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
-        key_lines = [line.strip() for line in key_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        if not key_lines:
-            print(f"ERROR: authorized key file is empty: {key_path}", file=sys.stderr)
-            return 1
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp_auth:
+        tmp_auth.write("\n".join(restricted_lines) + "\n")
+        local_auth = tmp_auth.name
 
-        forced_prefix = (
-            f'command="{remote_wrapper_path}",'
-            "no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding "
+    try:
+        tmp_remote_auth = "/tmp/ipwall.authorized_keys.tmp"
+        run_command(
+            scp_base(args) + [local_auth, f"{args.root_user}@{args.host}:{tmp_remote_auth}"],
+            dry_run=args.dry_run,
         )
-        restricted_lines = []
-        for key_line in key_lines:
-            if key_line.startswith("command="):
-                restricted_lines.append(key_line)
-            else:
-                restricted_lines.append(f"{forced_prefix}{key_line}")
+    finally:
+        if os.path.exists(local_auth):
+            os.unlink(local_auth)
 
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp_auth:
-            tmp_auth.write("\n".join(restricted_lines) + "\n")
-            local_auth = tmp_auth.name
-
-        try:
-            tmp_remote_auth = "/tmp/ipwall.authorized_keys.tmp"
-            run_command(
-                scp_base(args) + [local_auth, f"{args.root_user}@{args.host}:{tmp_remote_auth}"],
-                dry_run=args.dry_run,
-            )
-        finally:
-            if os.path.exists(local_auth):
-                os.unlink(local_auth)
-
-        remote_authorized_keys = f"{user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}"
-        remote_authorized_keys_q = shlex.quote(remote_authorized_keys)
-        remote_ssh_dir_q = shlex.quote(str(Path(remote_authorized_keys).parent))
-        run_ssh(
-            args,
-            " && ".join(
-                [
-                    f"mkdir -p {remote_ssh_dir_q}",
-                    f"chown {user_q}:{group_q} {remote_ssh_dir_q}",
-                    f"chmod 700 {remote_ssh_dir_q}",
-                    f"install -o {user_q} -g {group_q} -m 600 {shlex.quote(tmp_remote_auth)} {remote_authorized_keys_q}",
-                    f"rm -f {shlex.quote(tmp_remote_auth)}",
-                ]
-            ),
-        )
+    remote_authorized_keys = f"{user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}"
+    remote_authorized_keys_q = shlex.quote(remote_authorized_keys)
+    remote_ssh_dir_q = shlex.quote(str(Path(remote_authorized_keys).parent))
+    run_ssh(
+        args,
+        " && ".join(
+            [
+                f"mkdir -p {remote_ssh_dir_q}",
+                f"chown {user_q}:{group_q} {remote_ssh_dir_q}",
+                f"chmod 700 {remote_ssh_dir_q}",
+                f"install -o {user_q} -g {group_q} -m 600 {shlex.quote(tmp_remote_auth)} {remote_authorized_keys_q}",
+                f"rm -f {shlex.quote(tmp_remote_auth)}",
+            ]
+        ),
+    )
 
     # 5) Optional cert generation/application.
     if args.generate_certs:
@@ -386,11 +430,13 @@ def main():
     print(f"Remote script: {remote_script_path}")
     print(f"SSH wrapper shell: {remote_wrapper_path}")
     print(f"Managed user/group: {args.user}:{args.group}")
-    if args.authorized_key_file:
-        print(f"Authorized keys: {user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}")
-        print("Authorized key restrictions: forced command + no-pty/no-forwarding")
-    else:
-        print("Authorized keys: not installed (set --authorized-key-file to provision restricted SSH access)")
+    print(f"Authorized keys: {user_home.rstrip('/')}/{args.authorized_keys_path.lstrip('/')}")
+    print("Authorized key restrictions: forced command + no-pty/no-forwarding")
+    if not args.authorized_key_file:
+        if args.dry_run:
+            print("Generated user SSH keypair: dry-run placeholder only (no local files created)")
+        else:
+            print(f"Generated user SSH keypair (private key path): {generated_private_key}")
     if args.generate_certs:
         print(f"Certificates: {args.cert_dir.rstrip('/')}/ipwall.crt and ipwall.key")
     return 0
