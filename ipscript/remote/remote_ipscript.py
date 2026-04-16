@@ -13,12 +13,20 @@ from datetime import datetime, timezone
 REMOTE_CHAIN = os.environ.get("IPWALL_REMOTE_CHAIN", "IPWALL_REMOTE_SSH")
 SSH_PORT = os.environ.get("SSH_PORT", "22")
 LOCK_FILE = os.environ.get("IPWALL_REMOTE_LOCK_FILE", "/var/run/ipwall.lock")
+DEBUG_DEFAULT = os.environ.get("IPWALL_REMOTE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 CHAIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,28}$")
 RESERVED_CHAINS = {"INPUT", "OUTPUT", "FORWARD", "PREROUTING", "POSTROUTING"}
 
 
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def debug_log(enabled, **payload):
+    if not enabled:
+        return
+    payload.setdefault("at", utc_now_iso())
+    print(f"[ipwall-remote-debug] {json.dumps(payload, separators=(',', ':'))}", file=sys.stderr, flush=True)
 
 
 def run_cmd(cmd, check=True, dry_run=False, command_log=None):
@@ -266,6 +274,7 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="show planned iptables commands without applying")
     parser.add_argument("--add-ip", help="add a single IP to the managed chain")
     parser.add_argument("--del-ip", help="delete a single IP from the managed chain")
+    parser.add_argument("--debug", action="store_true", default=DEBUG_DEFAULT, help="emit debug events to stderr")
     return parser.parse_args()
 
 
@@ -355,6 +364,16 @@ def run_payload_action(chain, dry_run, payload):
 
 def main():
     args = parse_args()
+    debug_log(
+        args.debug,
+        event="start",
+        argv=sys.argv,
+        ssh_original_command=os.environ.get("SSH_ORIGINAL_COMMAND"),
+        chain=args.chain,
+        dry_run=bool(args.dry_run),
+        add_ip=args.add_ip,
+        del_ip=args.del_ip,
+    )
     if args.add_ip and args.del_ip:
         raise RuntimeError("use only one of --add-ip or --del-ip")
 
@@ -366,14 +385,19 @@ def main():
     lock_path = LOCK_FILE
     if args.dry_run and os.geteuid() != 0:
         lock_path = "/tmp/ipwall.lock"
+    debug_log(args.debug, event="lock_select", lock_path=lock_path, euid=os.geteuid(), single_mode=single_mode)
     with open(lock_path, "w", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        debug_log(args.debug, event="lock_acquired", lock_path=lock_path)
         if single_mode:
             result = run_single_action(chain, args.dry_run, add_ip=args.add_ip, del_ip=args.del_ip)
         else:
+            debug_log(args.debug, event="stdin_read_begin")
             payload = load_stdin_payload()
+            debug_log(args.debug, event="stdin_read_done", payload_keys=sorted(payload.keys()))
             result = run_payload_action(chain, args.dry_run, payload)
 
+    debug_log(args.debug, event="result", ok=result.get("ok", True), mode=result.get("mode"), action=result.get("action"))
     print(json.dumps(result, separators=(",", ":")))
     return 0
 
