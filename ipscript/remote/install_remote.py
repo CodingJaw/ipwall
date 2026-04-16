@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_GROUP = "ipwall"
 DEFAULT_USER = "ipwall"
@@ -26,7 +27,11 @@ def parse_args():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--host", required=True, help="Remote host/IP to install on")
+    parser.add_argument(
+        "--host",
+        required=True,
+        help="Remote host/IP, user@host, or ssh://user@host[:port] install target",
+    )
     parser.add_argument("--root-user", default="root", help="Remote SSH user with root privileges")
     parser.add_argument("--port", default=22, type=int, help="Remote SSH port")
     parser.add_argument("--ssh-key", help="SSH private key file")
@@ -53,6 +58,90 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_probably_public_key(text):
+    if not text:
+        return False
+    line = text.strip().splitlines()[0].strip()
+    if line.startswith("command="):
+        return "ssh-" in line or "ecdsa-" in line or "sk-" in line
+    return (
+        line.startswith("ssh-")
+        or line.startswith("ecdsa-")
+        or line.startswith("sk-")
+        or " ssh-" in line
+        or " ecdsa-" in line
+        or " sk-" in line
+    )
+
+
+def is_probably_private_key(text):
+    if not text:
+        return False
+    return "BEGIN OPENSSH PRIVATE KEY" in text or "BEGIN RSA PRIVATE KEY" in text
+
+
+def normalize_ssh_target(args):
+    host_value = args.host.strip()
+    if host_value.startswith("ssh://"):
+        parsed = urlparse(host_value)
+        if not parsed.hostname:
+            raise ValueError(f"Invalid --host SSH URL: {host_value}")
+        args.host = parsed.hostname
+        if parsed.username:
+            args.root_user = parsed.username
+        if parsed.port:
+            args.port = parsed.port
+        return
+
+    if "@" in host_value and "/" not in host_value:
+        user_part, host_part = host_value.split("@", 1)
+        if user_part:
+            args.root_user = user_part
+        if host_part:
+            args.host = host_part
+
+
+def validate_args(args):
+    normalize_ssh_target(args)
+
+    if args.ssh_key:
+        ssh_key_path = Path(args.ssh_key)
+        if not ssh_key_path.exists():
+            raise ValueError(f"SSH identity file not found: {ssh_key_path}")
+        key_text = ssh_key_path.read_text(encoding="utf-8", errors="ignore")
+        if is_probably_public_key(key_text):
+            if ssh_key_path.suffix == ".pub" and ssh_key_path.with_suffix("").exists():
+                args.ssh_key = str(ssh_key_path.with_suffix(""))
+            else:
+                raise ValueError(
+                    "SSH identity file appears to be a public key. --ssh-key must be a private key "
+                    "(for example ~/.ssh/id_ed25519, not ~/.ssh/id_ed25519.pub)."
+                )
+
+    if args.authorized_key_file:
+        auth_path = Path(args.authorized_key_file)
+        if not auth_path.exists():
+            raise ValueError(f"Authorized key file not found: {auth_path}")
+        auth_text = auth_path.read_text(encoding="utf-8", errors="ignore").strip()
+        if is_probably_private_key(auth_text):
+            if auth_path.suffix == ".pub":
+                raise ValueError(
+                    "--authorized-key-file points to a private key. Provide a public key file instead."
+                )
+            pub_candidate = auth_path.with_suffix(".pub")
+            if pub_candidate.exists():
+                args.authorized_key_file = str(pub_candidate)
+            else:
+                raise ValueError(
+                    "--authorized-key-file appears to be a private key. This argument must point to "
+                    "a public key (.pub) or authorized_keys-formatted file."
+                )
+        elif not is_probably_public_key(auth_text):
+            raise ValueError(
+                "--authorized-key-file does not look like a valid SSH public key/authorized_keys entry."
+            )
+
+
 def quote(cmd_parts):
     return " ".join(shlex.quote(part) for part in cmd_parts)
 
@@ -77,7 +166,16 @@ def run_command(cmd, dry_run=False):
     if dry_run:
         return
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        if cmd and cmd[0] == "ssh" and exc.returncode == 255:
+            print(
+                "ERROR: SSH authentication/connection failed. Verify --host/--root-user/--port and "
+                "pass a valid private key with --ssh-key if passwordless root access is required.",
+                file=sys.stderr,
+            )
+        raise
 
 
 def run_ssh(args, remote_script):
@@ -87,6 +185,11 @@ def run_ssh(args, remote_script):
 
 def main():
     args = parse_args()
+    try:
+        validate_args(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     local_remote_script = Path(__file__).resolve().parent / "remote_ipscript.py"
     if not local_remote_script.exists():
