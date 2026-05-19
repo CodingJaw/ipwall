@@ -219,6 +219,7 @@ def run_target_sync(target, payload, timeout_seconds, dry_run=False):
             cmd.extend(["-o", "BatchMode=yes"])
 
         cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
+        cmd.extend(["-o", f"ConnectTimeout={max(1, min(timeout_seconds, 30))}"])
         if target.get("passkey_file"):
             cmd.extend(["-i", target["passkey_file"]])
         cmd.extend(["-p", str(target["remote_port"])])
@@ -236,14 +237,26 @@ def run_target_sync(target, payload, timeout_seconds, dry_run=False):
             "returncode": 0,
         }
 
-    completed = subprocess.run(
-        cmd,
-        input=payload_json,
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            input=payload_json,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "command": cmd,
+            "payload": payload,
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+            "returncode": None,
+            "error": f"timeout after {timeout_seconds}s",
+        }
 
     response_obj = None
     stdout_trimmed = (completed.stdout or "").strip()
